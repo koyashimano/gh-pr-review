@@ -28,6 +28,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
       title
       url
       reviewThreads(first: 100, after: $after) {
+        totalCount
         nodes {
           id
           isResolved
@@ -72,6 +73,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $after) {
+        totalCount
         nodes {
           id
           isResolved
@@ -114,8 +116,9 @@ type pullRequest struct {
 }
 
 type reviewThreadConnection struct {
-	Nodes    []reviewThread `json:"nodes"`
-	PageInfo pageInfo       `json:"pageInfo"`
+	TotalCount int            `json:"totalCount"`
+	Nodes      []reviewThread `json:"nodes"`
+	PageInfo   pageInfo       `json:"pageInfo"`
 }
 
 type reviewThread struct {
@@ -175,6 +178,7 @@ type resolveOptions struct {
 }
 
 func run(cmd []string) (string, error) {
+	// run executes the given command and returns its stdout; stderr is captured for error reporting.
 	if len(cmd) == 0 {
 		return "", errors.New("empty command")
 	}
@@ -197,6 +201,7 @@ func run(cmd []string) (string, error) {
 }
 
 func ghJSON(cmd []string, v any) error {
+	// ghJSON runs a command expected to return JSON and decodes it into v using json.Decoder.
 	out, err := run(cmd)
 	if err != nil {
 		return err
@@ -241,21 +246,29 @@ func resolvePRNumber(provided *int) (int, error) {
 		Number json.Number `json:"number"`
 	}
 
-	if err := ghJSON([]string{"gh", "pr", "view", "--json", "number"}, &resp); err == nil && resp.Number != "" {
-		if n, err := strconv.Atoi(resp.Number.String()); err == nil {
-			return n, nil
+	if err := ghJSON([]string{"gh", "pr", "view", "--json", "number"}, &resp); err == nil {
+		if resp.Number == "" {
+			return 0, fmt.Errorf("failed to resolve PR number: empty number in gh JSON output")
 		}
+		n, parseErr := strconv.Atoi(resp.Number.String())
+		if parseErr != nil {
+			return 0, fmt.Errorf("failed to parse PR number %q from gh JSON output: %w", resp.Number.String(), parseErr)
+		}
+		return n, nil
 	}
 
 	out, err := run([]string{"gh", "pr", "view", "--json", "number", "--jq", ".number"})
-	if err == nil {
-		text := strings.Trim(strings.TrimSpace(out), "\"")
-		if n, parseErr := strconv.Atoi(text); parseErr == nil {
-			return n, nil
-		}
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve PR number from current branch: %w", err)
 	}
 
-	return 0, errors.New("failed to resolve PR number from current branch")
+	text := strings.Trim(strings.TrimSpace(out), "\"")
+	n, parseErr := strconv.Atoi(text)
+	if parseErr != nil {
+		return 0, fmt.Errorf("failed to parse PR number %q from gh output: %w", text, parseErr)
+	}
+
+	return n, nil
 }
 
 func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread, error) {
@@ -266,7 +279,7 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 	for {
 		afterVal := "null"
 		if after != nil {
-			afterVal = *after
+			afterVal = strconv.Quote(*after)
 		}
 
 		cmd := []string{
@@ -301,6 +314,16 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			}
 		}
 
+		if threads == nil {
+			estimated := pr.ReviewThreads.TotalCount
+			if estimated <= 0 {
+				estimated = len(pr.ReviewThreads.Nodes)
+			}
+			if estimated > 0 {
+				threads = make([]reviewThread, 0, estimated)
+			}
+		}
+
 		threads = append(threads, pr.ReviewThreads.Nodes...)
 
 		if pr.ReviewThreads.PageInfo.HasNextPage && pr.ReviewThreads.PageInfo.EndCursor != "" {
@@ -315,7 +338,7 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 	return prInfo, threads, nil
 }
 
-func shortenDiffHunk(diffHunk string, ctx int) string {
+func abbreviateDiffHunk(diffHunk string, ctx int) string {
 	s := strings.ReplaceAll(strings.ReplaceAll(diffHunk, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(s, "\n")
 
@@ -430,7 +453,7 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 
 			diffBlock := "…"
 			if strings.TrimSpace(c.DiffHunk) != "" {
-				diffBlock = shortenDiffHunk(c.DiffHunk, ctx)
+				diffBlock = abbreviateDiffHunk(c.DiffHunk, ctx)
 			}
 
 			out = append(out, fmt.Sprintf("### %s at %s", author, createdAt))
@@ -465,7 +488,7 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 	for {
 		afterVal := "null"
 		if after != nil {
-			afterVal = *after
+			afterVal = strconv.Quote(*after)
 		}
 
 		cmd := []string{
@@ -482,7 +505,8 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 				Repository struct {
 					PullRequest struct {
 						ReviewThreads struct {
-							Nodes []struct {
+							TotalCount int `json:"totalCount"`
+							Nodes      []struct {
 								ID         string `json:"id"`
 								IsResolved bool   `json:"isResolved"`
 							} `json:"nodes"`
@@ -504,6 +528,28 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 		}
 
 		pull := resp.Data.Repository.PullRequest
+
+		if ids == nil {
+			estimated := pull.ReviewThreads.TotalCount
+			if estimated <= 0 {
+				estimated = len(pull.ReviewThreads.Nodes)
+			}
+			if estimated > 0 {
+				ids = make([]string, 0, estimated)
+			}
+		}
+
+		requiredExtra := len(pull.ReviewThreads.Nodes)
+		if requiredExtra > 0 {
+			available := cap(ids) - len(ids)
+			if available < requiredExtra {
+				newCap := len(ids) + requiredExtra
+				newSlice := make([]string, len(ids), newCap)
+				copy(newSlice, ids)
+				ids = newSlice
+			}
+		}
+
 		for _, n := range pull.ReviewThreads.Nodes {
 			if !n.IsResolved && n.ID != "" {
 				ids = append(ids, n.ID)
@@ -565,7 +611,7 @@ func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
 	resolved := 0
 	for _, id := range ids {
 		if err := resolveThread(id); err != nil {
-			return resolved, err
+			return resolved, fmt.Errorf("failed to resolve thread %s after resolving %d threads: %w", id, resolved, err)
 		}
 		resolved++
 	}
@@ -587,8 +633,8 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 		var buf bytes.Buffer
 		fs.SetOutput(&buf)
 
-		fs.IntVar(&exp.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk.")
-		fs.IntVar(&exp.ctx, "context", 3, "Number of lines to keep from the start/end of each diff hunk.")
+		fs.IntVar(&exp.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk. Alias: -context.")
+		fs.IntVar(&exp.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
 		fs.BoolVar(&exp.unresolvedOnly, "unresolved-only", false, "Show only unresolved threads.")
 
 		if err := fs.Parse(os.Args[2:]); err != nil {
