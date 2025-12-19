@@ -59,7 +59,36 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
               position
               originalPosition
             }
+            pageInfo { hasNextPage endCursor }
           }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+`
+
+const commentPageQuery = `
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        totalCount
+        nodes {
+          id
+          url
+          createdAt
+          body
+          diffHunk
+          author { login }
+          path
+          line
+          startLine
+          originalLine
+          originalStartLine
+          position
+          originalPosition
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -140,6 +169,7 @@ type reviewThread struct {
 type commentConnection struct {
 	TotalCount int       `json:"totalCount"`
 	Nodes      []comment `json:"nodes"`
+	PageInfo   pageInfo  `json:"pageInfo"`
 }
 
 type comment struct {
@@ -208,7 +238,7 @@ func ghJSON(cmd []string, v any) error {
 	}
 
 	if strings.TrimSpace(out) == "" {
-		return errors.New("empty output")
+		return fmt.Errorf("command returned empty output: expected JSON response from %q", strings.Join(cmd, " "))
 	}
 
 	dec := json.NewDecoder(strings.NewReader(out))
@@ -246,26 +276,17 @@ func resolvePRNumber(provided *int) (int, error) {
 		Number json.Number `json:"number"`
 	}
 
-	if err := ghJSON([]string{"gh", "pr", "view", "--json", "number"}, &resp); err == nil {
-		if resp.Number == "" {
-			return 0, fmt.Errorf("failed to resolve PR number: empty number in gh JSON output")
-		}
-		n, parseErr := strconv.Atoi(resp.Number.String())
-		if parseErr != nil {
-			return 0, fmt.Errorf("failed to parse PR number %q from gh JSON output: %w", resp.Number.String(), parseErr)
-		}
-		return n, nil
-	}
-
-	out, err := run([]string{"gh", "pr", "view", "--json", "number", "--jq", ".number"})
-	if err != nil {
+	if err := ghJSON([]string{"gh", "pr", "view", "--json", "number"}, &resp); err != nil {
 		return 0, fmt.Errorf("failed to resolve PR number from current branch: %w", err)
 	}
 
-	text := strings.Trim(strings.TrimSpace(out), "\"")
-	n, parseErr := strconv.Atoi(text)
+	if resp.Number == "" {
+		return 0, fmt.Errorf("PR number not found for current branch. Specify a PR number explicitly or ensure you are on a branch with an open pull request")
+	}
+
+	n, parseErr := strconv.Atoi(resp.Number.String())
 	if parseErr != nil {
-		return 0, fmt.Errorf("failed to parse PR number %q from gh output: %w", text, parseErr)
+		return 0, fmt.Errorf("failed to parse PR number %q from gh JSON output: %w", resp.Number.String(), parseErr)
 	}
 
 	return n, nil
@@ -303,7 +324,7 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 
 		pr := resp.Data.Repository.PullRequest
 		if pr.Number == 0 && pr.Title == "" && pr.URL == "" {
-			return prInfo, nil, errors.New("failed to fetch PR data via GraphQL")
+			return prInfo, nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
 		}
 
 		if prInfo.Number == 0 {
@@ -324,7 +345,16 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			}
 		}
 
-		threads = append(threads, pr.ReviewThreads.Nodes...)
+		for _, t := range pr.ReviewThreads.Nodes {
+			if t.Comments.PageInfo.HasNextPage {
+				fullComments, err := fetchAllComments(t.ID, t.Comments)
+				if err != nil {
+					return prInfo, nil, err
+				}
+				t.Comments = fullComments
+			}
+			threads = append(threads, t)
+		}
 
 		if pr.ReviewThreads.PageInfo.HasNextPage && pr.ReviewThreads.PageInfo.EndCursor != "" {
 			cursor := pr.ReviewThreads.PageInfo.EndCursor
@@ -338,7 +368,51 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 	return prInfo, threads, nil
 }
 
+func fetchAllComments(threadID string, existing commentConnection) (commentConnection, error) {
+	out := existing
+	after := existing.PageInfo.EndCursor
+
+	for existing.PageInfo.HasNextPage && after != "" {
+		afterVal := strconv.Quote(after)
+		cmd := []string{
+			"gh", "api", "graphql",
+			"-F", fmt.Sprintf("id=%s", threadID),
+			"-F", fmt.Sprintf("after=%s", afterVal),
+			"-f", fmt.Sprintf("query=%s", commentPageQuery),
+		}
+
+		var resp struct {
+			Data struct {
+				Node struct {
+					Comments commentConnection `json:"comments"`
+				} `json:"node"`
+			} `json:"data"`
+			Errors []graphQLError `json:"errors"`
+		}
+
+		if err := ghJSON(cmd, &resp); err != nil {
+			return out, err
+		}
+
+		if len(resp.Errors) > 0 {
+			blob, _ := json.Marshal(resp.Errors)
+			return out, fmt.Errorf("GraphQL errors: %s", string(blob))
+		}
+
+		out.Nodes = append(out.Nodes, resp.Data.Node.Comments.Nodes...)
+		out.TotalCount = resp.Data.Node.Comments.TotalCount
+		out.PageInfo = resp.Data.Node.Comments.PageInfo
+		after = out.PageInfo.EndCursor
+		existing.PageInfo = out.PageInfo
+	}
+
+	return out, nil
+}
+
 func abbreviateDiffHunk(diffHunk string, ctx int) string {
+	if ctx < 1 {
+		ctx = 1
+	}
 	s := strings.ReplaceAll(strings.ReplaceAll(diffHunk, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(s, "\n")
 
@@ -539,17 +613,6 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 			}
 		}
 
-		requiredExtra := len(pull.ReviewThreads.Nodes)
-		if requiredExtra > 0 {
-			available := cap(ids) - len(ids)
-			if available < requiredExtra {
-				newCap := len(ids) + requiredExtra
-				newSlice := make([]string, len(ids), newCap)
-				copy(newSlice, ids)
-				ids = newSlice
-			}
-		}
-
 		for _, n := range pull.ReviewThreads.Nodes {
 			if !n.IsResolved && n.ID != "" {
 				ids = append(ids, n.ID)
@@ -603,6 +666,7 @@ func resolveThread(threadID string) error {
 }
 
 func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
+	// Resolve sequentially to avoid tripping GraphQL rate limits; revisit with batching if needed.
 	ids, err := fetchUnresolvedThreadIDs(owner, repo, prNumber)
 	if err != nil {
 		return 0, err
@@ -619,6 +683,20 @@ func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
 	return resolved, nil
 }
 
+func parsePRArg(args []string) (*int, error) {
+	if len(args) > 1 {
+		return nil, fmt.Errorf("unexpected arguments: %v", args[1:])
+	}
+	if len(args) == 0 {
+		return nil, nil
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid PR number: %q", args[0])
+	}
+	return &n, nil
+}
+
 func parseArgs() (command, exportOptions, resolveOptions, error) {
 	var exp exportOptions
 	var res resolveOptions
@@ -633,7 +711,7 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 		var buf bytes.Buffer
 		fs.SetOutput(&buf)
 
-		fs.IntVar(&exp.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk. Alias: -context.")
+		fs.IntVar(&exp.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk (alias: -context).")
 		fs.IntVar(&exp.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
 		fs.BoolVar(&exp.unresolvedOnly, "unresolved-only", false, "Show only unresolved threads.")
 
@@ -645,18 +723,15 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 			return "", exp, res, errors.New(msg)
 		}
 
-		args := fs.Args()
-		if len(args) > 1 {
-			return "", exp, res, fmt.Errorf("unexpected arguments: %v", args[1:])
+		prArg, err := parsePRArg(fs.Args())
+		if err != nil {
+			return "", exp, res, err
 		}
-		if len(args) == 1 {
-			n, err := strconv.Atoi(args[0])
-			if err != nil {
-				return "", exp, res, fmt.Errorf("invalid PR number: %q", args[0])
-			}
-			exp.prNumber = &n
-		}
+		exp.prNumber = prArg
 
+		if exp.ctx < 1 {
+			exp.ctx = 1
+		}
 		return cmdExport, exp, res, nil
 
 	case string(cmdResolve):
@@ -672,17 +747,11 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 			return "", exp, res, errors.New(msg)
 		}
 
-		args := fs.Args()
-		if len(args) > 1 {
-			return "", exp, res, fmt.Errorf("unexpected arguments: %v", args[1:])
+		prArg, err := parsePRArg(fs.Args())
+		if err != nil {
+			return "", exp, res, err
 		}
-		if len(args) == 1 {
-			n, err := strconv.Atoi(args[0])
-			if err != nil {
-				return "", exp, res, fmt.Errorf("invalid PR number: %q", args[0])
-			}
-			res.prNumber = &n
-		}
+		res.prNumber = prArg
 
 		return cmdResolve, exp, res, nil
 
@@ -740,9 +809,5 @@ func main() {
 		} else {
 			fmt.Printf("Resolved %d thread(s).\n", count)
 		}
-
-	default:
-		fmt.Fprintf(os.Stderr, "error: unknown command\n")
-		os.Exit(1)
 	}
 }
