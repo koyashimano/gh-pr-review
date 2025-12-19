@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+/gh-prr
 
 # Test binary, built with `go test -c`
 *.test
