@@ -298,19 +298,18 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 	var after *string
 
 	for {
-		afterVal := "null"
-		if after != nil {
-			afterVal = strconv.Quote(*after)
-		}
-
 		cmd := []string{
 			"gh", "api", "graphql",
 			"-F", fmt.Sprintf("owner=%s", owner),
 			"-F", fmt.Sprintf("name=%s", repo),
 			"-F", fmt.Sprintf("number=%d", prNumber),
-			"-F", fmt.Sprintf("after=%s", afterVal),
-			"-f", fmt.Sprintf("query=%s", gqlQuery),
 		}
+
+		if after != nil {
+			cmd = append(cmd, "-F", fmt.Sprintf("after=%s", *after))
+		}
+
+		cmd = append(cmd, "-f", fmt.Sprintf("query=%s", gqlQuery))
 
 		var resp graphQLResponse
 		if err := ghJSON(cmd, &resp); err != nil {
@@ -373,11 +372,10 @@ func fetchAllComments(threadID string, existing commentConnection) (commentConne
 	after := existing.PageInfo.EndCursor
 
 	for existing.PageInfo.HasNextPage && after != "" {
-		afterVal := strconv.Quote(after)
 		cmd := []string{
 			"gh", "api", "graphql",
 			"-F", fmt.Sprintf("id=%s", threadID),
-			"-F", fmt.Sprintf("after=%s", afterVal),
+			"-F", fmt.Sprintf("after=%s", after),
 			"-f", fmt.Sprintf("query=%s", commentPageQuery),
 		}
 
@@ -556,19 +554,18 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 	var after *string
 
 	for {
-		afterVal := "null"
-		if after != nil {
-			afterVal = strconv.Quote(*after)
-		}
-
 		cmd := []string{
 			"gh", "api", "graphql",
 			"-F", fmt.Sprintf("owner=%s", owner),
 			"-F", fmt.Sprintf("name=%s", repo),
 			"-F", fmt.Sprintf("number=%d", prNumber),
-			"-F", fmt.Sprintf("after=%s", afterVal),
-			"-f", fmt.Sprintf("query=%s", unresolvedThreadsQuery),
 		}
+
+		if after != nil {
+			cmd = append(cmd, "-F", fmt.Sprintf("after=%s", *after))
+		}
+
+		cmd = append(cmd, "-f", fmt.Sprintf("query=%s", unresolvedThreadsQuery))
 
 		var resp struct {
 			Data struct {
