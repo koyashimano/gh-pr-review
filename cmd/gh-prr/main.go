@@ -213,13 +213,13 @@ func run(cmd []string) (string, error) {
 		return "", errors.New("empty command")
 	}
 
-	c := exec.Command(cmd[0], cmd[1:]...)
+	execCmd := exec.Command(cmd[0], cmd[1:]...)
 
 	var stdout, stderr bytes.Buffer
-	c.Stdout = &stdout
-	c.Stderr = &stderr
+	execCmd.Stdout = &stdout
+	execCmd.Stderr = &stderr
 
-	if err := c.Run(); err != nil {
+	if err := execCmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = fmt.Sprintf("command failed: %s", strings.Join(cmd, " "))
@@ -284,12 +284,12 @@ func resolvePRNumber(provided *int) (int, error) {
 		return 0, fmt.Errorf("PR number not found for current branch. Specify a PR number explicitly or ensure you are on a branch with an open pull request")
 	}
 
-	n, parseErr := strconv.Atoi(resp.Number.String())
+	prNumber, parseErr := strconv.Atoi(resp.Number.String())
 	if parseErr != nil {
 		return 0, fmt.Errorf("failed to parse PR number %q from gh JSON output: %w", resp.Number.String(), parseErr)
 	}
 
-	return n, nil
+	return prNumber, nil
 }
 
 func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread, error) {
@@ -345,15 +345,15 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			}
 		}
 
-		for _, t := range pr.ReviewThreads.Nodes {
-			if t.Comments.PageInfo.HasNextPage {
-				fullComments, err := fetchAllComments(t.ID, t.Comments)
+		for _, thread := range pr.ReviewThreads.Nodes {
+			if thread.Comments.PageInfo.HasNextPage {
+				fullComments, err := fetchAllComments(thread.ID, thread.Comments)
 				if err != nil {
 					return prInfo, nil, err
 				}
-				t.Comments = fullComments
+				thread.Comments = fullComments
 			}
-			threads = append(threads, t)
+			threads = append(threads, thread)
 		}
 
 		if pr.ReviewThreads.PageInfo.HasNextPage && pr.ReviewThreads.PageInfo.EndCursor != "" {
@@ -413,12 +413,8 @@ func abbreviateDiffHunk(diffHunk string, ctx int) string {
 	if ctx < 1 {
 		ctx = 1
 	}
-	s := strings.ReplaceAll(strings.ReplaceAll(diffHunk, "\r\n", "\n"), "\r", "\n")
-	lines := strings.Split(s, "\n")
-
-	if ctx <= 0 {
-		return "…"
-	}
+	normalizedDiff := strings.ReplaceAll(strings.ReplaceAll(diffHunk, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(normalizedDiff, "\n")
 
 	if len(lines) <= ctx*2 {
 		return strings.Join(lines, "\n")
@@ -466,68 +462,68 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 		return threadSortKey(sorted[i]) < threadSortKey(sorted[j])
 	})
 
-	for _, t := range sorted {
-		if unresolvedOnly && t.IsResolved {
+	for _, thread := range sorted {
+		if unresolvedOnly && thread.IsResolved {
 			continue
 		}
 
-		path := t.Path
+		path := thread.Path
 		if path == "" {
 			path = "?"
 		}
-		loc := fmtLoc(path, t.StartLine, t.Line)
+		loc := fmtLoc(path, thread.StartLine, thread.Line)
 
 		status := "Unresolved"
-		if t.IsResolved {
+		if thread.IsResolved {
 			status = "Resolved"
 		}
 
 		statusLine := fmt.Sprintf("**Status:** %s", status)
-		if t.IsResolved && t.ResolvedBy != nil && t.ResolvedBy.Login != "" {
-			statusLine += fmt.Sprintf(" (by %s)", t.ResolvedBy.Login)
+		if thread.IsResolved && thread.ResolvedBy != nil && thread.ResolvedBy.Login != "" {
+			statusLine += fmt.Sprintf(" (by %s)", thread.ResolvedBy.Login)
 		}
 
-		side := t.DiffSide
+		side := thread.DiffSide
 		if side == "" {
 			side = "RIGHT"
 		}
 		sideLine := fmt.Sprintf("- Side: %s", side)
-		if t.StartDiffSide != "" {
-			sideLine += fmt.Sprintf(" (start: %s)", t.StartDiffSide)
+		if thread.StartDiffSide != "" {
+			sideLine += fmt.Sprintf(" (start: %s)", thread.StartDiffSide)
 		}
 
 		out = append(out, fmt.Sprintf("## %s", loc))
 		out = append(out, statusLine)
 		out = append(out, sideLine)
 
-		if t.IsOutdated {
+		if thread.IsOutdated {
 			out = append(out, "- Note: Outdated thread")
 		}
-		if t.IsCollapsed {
+		if thread.IsCollapsed {
 			out = append(out, "- Note: Collapsed thread")
 		}
 		out = append(out, "")
 
-		comments := t.Comments.Nodes
-		totalCount := t.Comments.TotalCount
+		comments := thread.Comments.Nodes
+		totalCount := thread.Comments.TotalCount
 
 		if len(comments) == 0 {
 			out = append(out, "_No comments in this thread._", "")
 			continue
 		}
 
-		for _, c := range comments {
+		for _, comment := range comments {
 			author := "?"
-			if c.Author != nil && c.Author.Login != "" {
-				author = c.Author.Login
+			if comment.Author != nil && comment.Author.Login != "" {
+				author = comment.Author.Login
 			}
-			createdAt := c.CreatedAt
-			url := c.URL
-			body := strings.TrimRight(c.Body, "\n\r")
+			createdAt := comment.CreatedAt
+			url := comment.URL
+			body := strings.TrimRight(comment.Body, "\n\r")
 
 			diffBlock := "…"
-			if strings.TrimSpace(c.DiffHunk) != "" {
-				diffBlock = abbreviateDiffHunk(c.DiffHunk, ctx)
+			if strings.TrimSpace(comment.DiffHunk) != "" {
+				diffBlock = abbreviateDiffHunk(comment.DiffHunk, ctx)
 			}
 
 			out = append(out, fmt.Sprintf("### %s at %s", author, createdAt))
@@ -690,11 +686,11 @@ func parsePRArg(args []string) (*int, error) {
 	if len(args) == 0 {
 		return nil, nil
 	}
-	n, err := strconv.Atoi(args[0])
+	prNumber, err := strconv.Atoi(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid PR number: %q", args[0])
 	}
-	return &n, nil
+	return &prNumber, nil
 }
 
 func parseArgs() (command, exportOptions, resolveOptions, error) {
