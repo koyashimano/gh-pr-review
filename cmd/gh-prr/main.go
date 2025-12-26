@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type command string
@@ -659,18 +660,50 @@ func resolveThread(threadID string) error {
 }
 
 func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
-	// Resolve sequentially to avoid tripping GraphQL rate limits; revisit with batching if needed.
 	ids, err := fetchUnresolvedThreadIDs(owner, repo, prNumber)
 	if err != nil {
 		return 0, err
 	}
 
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Use concurrency to speed up resolution; limit parallelism to avoid rate limits
+	const maxConcurrent = 10
+	sem := make(chan struct{}, maxConcurrent)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
 	resolved := 0
+
 	for _, id := range ids {
-		if err := resolveThread(id); err != nil {
-			return resolved, fmt.Errorf("failed to resolve thread %s after resolving %d threads: %w", id, resolved, err)
-		}
-		resolved++
+		wg.Add(1)
+		go func(threadID string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := resolveThread(threadID); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("resolved %d threads before failure; failed to resolve thread %s: %w", resolved, threadID, err)
+				}
+				mu.Unlock()
+				return
+			}
+
+			mu.Lock()
+			resolved++
+			mu.Unlock()
+		}(id)
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return resolved, firstErr
 	}
 
 	return resolved, nil
