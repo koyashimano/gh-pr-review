@@ -688,7 +688,7 @@ func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
 			if err := resolveThread(threadID); err != nil {
 				mu.Lock()
 				if firstErr == nil {
-					firstErr = fmt.Errorf("failed to resolve thread %s: %w", threadID, err)
+					firstErr = fmt.Errorf("resolved %d threads before failure; failed to resolve thread %s: %w", resolved, threadID, err)
 				}
 				mu.Unlock()
 				return
