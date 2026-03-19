@@ -614,7 +614,7 @@ func fmtLoc(path string, startLine, line *int) string {
 	case startLine != nil:
 		return fmt.Sprintf("%s:%d", path, *startLine)
 	default:
-		return fmt.Sprintf("%s:?", path)
+		return path
 	}
 }
 
@@ -701,19 +701,18 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 			url := comment.URL
 			body := strings.TrimRight(comment.Body, "\n\r")
 
-			diffBlock := "…"
-			if strings.TrimSpace(comment.DiffHunk) != "" {
-				diffBlock = abbreviateDiffHunk(comment.DiffHunk, ctx)
-			}
-
 			out = append(out, fmt.Sprintf("### %s at %s", author, createdAt))
 			if url != "" {
 				out = append(out, fmt.Sprintf("- URL: %s", url))
 			}
 			out = append(out, "")
-			out = append(out, "```diff")
-			out = append(out, diffBlock)
-			out = append(out, "```")
+			if strings.TrimSpace(comment.DiffHunk) != "" {
+				diffBlock := abbreviateDiffHunk(comment.DiffHunk, ctx)
+				out = append(out, "```diff")
+				out = append(out, diffBlock)
+				out = append(out, "```")
+				out = append(out, "")
+			}
 			out = append(out, "")
 			if body == "" {
 				body = "_(empty)_"
@@ -768,16 +767,14 @@ func renderPendingMarkdown(pr pullRequest, review *pendingReview, ctx int) strin
 
 		out = append(out, fmt.Sprintf("## %s", loc))
 
-		diffBlock := "\u2026"
+		out = append(out, "")
 		if strings.TrimSpace(c.DiffHunk) != "" {
-			diffBlock = abbreviateDiffHunk(c.DiffHunk, ctx)
+			diffBlock := abbreviateDiffHunk(c.DiffHunk, ctx)
+			out = append(out, "```diff")
+			out = append(out, diffBlock)
+			out = append(out, "```")
+			out = append(out, "")
 		}
-
-		out = append(out, "")
-		out = append(out, "```diff")
-		out = append(out, diffBlock)
-		out = append(out, "```")
-		out = append(out, "")
 
 		body := strings.TrimRight(c.Body, "\n\r")
 		if body == "" {
