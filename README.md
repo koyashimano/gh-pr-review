@@ -12,3 +12,5 @@
   - `gh-prr export [pr_number] [-c N] [--unresolved-only]` (defaults to current branch PR)
 - Resolve all unresolved review threads:
   - `gh-prr resolve [pr_number]` (defaults to current branch PR)
+- Show pending (unsubmitted) review comments:
+  - `gh-prr pending [pr_number] [-c N]` (defaults to current branch PR)

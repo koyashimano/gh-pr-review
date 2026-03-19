@@ -19,6 +19,7 @@ type command string
 const (
 	cmdExport  command = "export"
 	cmdResolve command = "resolve"
+	cmdPending command = "pending"
 )
 
 const gqlQuery = `
@@ -125,6 +126,70 @@ mutation($id:ID!) {
 }
 `
 
+const pendingReviewQuery = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      reviews(first: 10, states: [PENDING]) {
+        nodes {
+          id
+          author { login }
+          body
+          comments(first: 100) {
+            totalCount
+            nodes {
+              id
+              url
+              body
+              path
+              position
+              originalPosition
+              diffHunk
+              createdAt
+              line
+              startLine
+              originalLine
+              originalStartLine
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+const pendingReviewCommentPageQuery = `
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReview {
+      comments(first: 100, after: $after) {
+        totalCount
+        nodes {
+          id
+          url
+          body
+          path
+          position
+          originalPosition
+          diffHunk
+          createdAt
+          line
+          startLine
+          originalLine
+          originalStartLine
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+`
+
 type graphQLResponse struct {
 	Data struct {
 		Repository struct {
@@ -198,6 +263,29 @@ type pageInfo struct {
 	EndCursor   string `json:"endCursor"`
 }
 
+type pendingReviewResponse struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				Number  int    `json:"number"`
+				Title   string `json:"title"`
+				URL     string `json:"url"`
+				Reviews struct {
+					Nodes []pendingReview `json:"nodes"`
+				} `json:"reviews"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []graphQLError `json:"errors"`
+}
+
+type pendingReview struct {
+	ID       string            `json:"id"`
+	Author   *user             `json:"author"`
+	Body     string            `json:"body"`
+	Comments commentConnection `json:"comments"`
+}
+
 type exportOptions struct {
 	ctx            int
 	unresolvedOnly bool
@@ -205,6 +293,11 @@ type exportOptions struct {
 }
 
 type resolveOptions struct {
+	prNumber *int
+}
+
+type pendingOptions struct {
+	ctx      int
 	prNumber *int
 }
 
@@ -408,6 +501,94 @@ func fetchAllComments(threadID string, existing commentConnection) (commentConne
 	return out, nil
 }
 
+func fetchPendingReview(owner, repo string, prNumber int) (pullRequest, *pendingReview, error) {
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-F", fmt.Sprintf("owner=%s", owner),
+		"-F", fmt.Sprintf("name=%s", repo),
+		"-F", fmt.Sprintf("number=%d", prNumber),
+		"-f", fmt.Sprintf("query=%s", pendingReviewQuery),
+	}
+
+	var resp pendingReviewResponse
+	if err := ghJSON(cmd, &resp); err != nil {
+		return pullRequest{}, nil, err
+	}
+
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return pullRequest{}, nil, fmt.Errorf("GraphQL errors: %s", string(blob))
+	}
+
+	pr := resp.Data.Repository.PullRequest
+	if pr.Number == 0 && pr.Title == "" && pr.URL == "" {
+		return pullRequest{}, nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
+	}
+
+	prInfo := pullRequest{
+		Number: pr.Number,
+		Title:  pr.Title,
+		URL:    pr.URL,
+	}
+
+	reviews := pr.Reviews.Nodes
+	if len(reviews) == 0 {
+		return prInfo, nil, nil
+	}
+
+	review := reviews[0]
+
+	if review.Comments.PageInfo.HasNextPage {
+		fullComments, err := fetchAllPendingReviewComments(review.ID, review.Comments)
+		if err != nil {
+			return prInfo, nil, err
+		}
+		review.Comments = fullComments
+	}
+
+	return prInfo, &review, nil
+}
+
+func fetchAllPendingReviewComments(reviewID string, existing commentConnection) (commentConnection, error) {
+	out := existing
+	after := existing.PageInfo.EndCursor
+
+	for existing.PageInfo.HasNextPage && after != "" {
+		cmd := []string{
+			"gh", "api", "graphql",
+			"-F", fmt.Sprintf("id=%s", reviewID),
+			"-F", fmt.Sprintf("after=%s", after),
+			"-f", fmt.Sprintf("query=%s", pendingReviewCommentPageQuery),
+		}
+
+		var resp struct {
+			Data struct {
+				Node struct {
+					Comments commentConnection `json:"comments"`
+				} `json:"node"`
+			} `json:"data"`
+			Errors []graphQLError `json:"errors"`
+		}
+
+		if err := ghJSON(cmd, &resp); err != nil {
+			return out, err
+		}
+
+		if len(resp.Errors) > 0 {
+			blob, _ := json.Marshal(resp.Errors)
+			return out, fmt.Errorf("GraphQL errors: %s", string(blob))
+		}
+
+		out.Nodes = append(out.Nodes, resp.Data.Node.Comments.Nodes...)
+		out.TotalCount = resp.Data.Node.Comments.TotalCount
+		out.PageInfo = resp.Data.Node.Comments.PageInfo
+		after = out.PageInfo.EndCursor
+		existing.PageInfo = out.PageInfo
+	}
+
+	return out, nil
+}
+
 func abbreviateDiffHunk(diffHunk string, ctx int) string {
 	if ctx < 1 {
 		ctx = 1
@@ -545,6 +726,70 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 			out = append(out, fmt.Sprintf("> Note: comments truncated (%d/%d).", len(comments), totalCount))
 			out = append(out, "")
 		}
+	}
+
+	return strings.Join(out, "\n") + "\n"
+}
+
+func renderPendingMarkdown(pr pullRequest, review *pendingReview, ctx int) string {
+	var out []string
+
+	out = append(out, "# Pending Review Comments", "")
+	out = append(out, fmt.Sprintf("- PR: %s", pr.URL))
+	out = append(out, fmt.Sprintf("- Title: %s", pr.Title))
+	out = append(out, fmt.Sprintf("- Number: %d", pr.Number))
+
+	if review == nil || len(review.Comments.Nodes) == 0 {
+		out = append(out, "")
+		out = append(out, "No pending review comments.")
+		out = append(out, "")
+		return strings.Join(out, "\n") + "\n"
+	}
+
+	out = append(out, fmt.Sprintf("- Pending comments: %d", len(review.Comments.Nodes)))
+
+	if body := strings.TrimSpace(review.Body); body != "" {
+		out = append(out, "")
+		out = append(out, "## Review Body")
+		out = append(out, "")
+		out = append(out, body)
+	}
+
+	out = append(out, "")
+
+	comments := make([]comment, len(review.Comments.Nodes))
+	copy(comments, review.Comments.Nodes)
+	sort.SliceStable(comments, func(i, j int) bool {
+		return comments[i].CreatedAt < comments[j].CreatedAt
+	})
+
+	for _, c := range comments {
+		loc := fmtLoc(c.Path, c.StartLine, c.Line)
+
+		out = append(out, fmt.Sprintf("## %s", loc))
+
+		diffBlock := "\u2026"
+		if strings.TrimSpace(c.DiffHunk) != "" {
+			diffBlock = abbreviateDiffHunk(c.DiffHunk, ctx)
+		}
+
+		out = append(out, "")
+		out = append(out, "```diff")
+		out = append(out, diffBlock)
+		out = append(out, "```")
+		out = append(out, "")
+
+		body := strings.TrimRight(c.Body, "\n\r")
+		if body == "" {
+			body = "_(empty)_"
+		}
+		out = append(out, body)
+		out = append(out, "")
+	}
+
+	if review.Comments.TotalCount > len(review.Comments.Nodes) {
+		out = append(out, fmt.Sprintf("> Note: comments truncated (%d/%d).", len(review.Comments.Nodes), review.Comments.TotalCount))
+		out = append(out, "")
 	}
 
 	return strings.Join(out, "\n") + "\n"
@@ -723,12 +968,12 @@ func parsePRArg(args []string) (*int, error) {
 	return &prNumber, nil
 }
 
-func parseArgs() (command, exportOptions, resolveOptions, error) {
+func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, error) {
 	var exp exportOptions
 	var res resolveOptions
 
 	if len(os.Args) < 2 {
-		return "", exp, res, errors.New("command required: export or resolve")
+		return "", exp, res, pendingOptions{}, errors.New("command required: export, resolve, or pending")
 	}
 
 	switch os.Args[1] {
@@ -744,21 +989,21 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			msg := strings.TrimSpace(buf.String())
 			if msg == "" {
-				return "", exp, res, err
+				return "", exp, res, pendingOptions{}, err
 			}
-			return "", exp, res, errors.New(msg)
+			return "", exp, res, pendingOptions{}, errors.New(msg)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return "", exp, res, err
+			return "", exp, res, pendingOptions{}, err
 		}
 		exp.prNumber = prArg
 
 		if exp.ctx < 1 {
 			exp.ctx = 1
 		}
-		return cmdExport, exp, res, nil
+		return cmdExport, exp, res, pendingOptions{}, nil
 
 	case string(cmdResolve):
 		fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
@@ -768,28 +1013,56 @@ func parseArgs() (command, exportOptions, resolveOptions, error) {
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			msg := strings.TrimSpace(buf.String())
 			if msg == "" {
-				return "", exp, res, err
+				return "", exp, res, pendingOptions{}, err
 			}
-			return "", exp, res, errors.New(msg)
+			return "", exp, res, pendingOptions{}, errors.New(msg)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return "", exp, res, err
+			return "", exp, res, pendingOptions{}, err
 		}
 		res.prNumber = prArg
 
-		return cmdResolve, exp, res, nil
+		return cmdResolve, exp, res, pendingOptions{}, nil
+
+	case string(cmdPending):
+		fs := flag.NewFlagSet("pending", flag.ContinueOnError)
+		var buf bytes.Buffer
+		fs.SetOutput(&buf)
+
+		var pend pendingOptions
+		fs.IntVar(&pend.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk (alias: -context).")
+		fs.IntVar(&pend.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
+
+		if err := fs.Parse(os.Args[2:]); err != nil {
+			msg := strings.TrimSpace(buf.String())
+			if msg == "" {
+				return "", exp, res, pend, err
+			}
+			return "", exp, res, pend, errors.New(msg)
+		}
+
+		prArg, err := parsePRArg(fs.Args())
+		if err != nil {
+			return "", exp, res, pend, err
+		}
+		pend.prNumber = prArg
+
+		if pend.ctx < 1 {
+			pend.ctx = 1
+		}
+		return cmdPending, exp, res, pend, nil
 
 	case "-h", "--help":
-		return "", exp, res, errors.New("usage: gh-prr <export|resolve> [args]")
+		return "", exp, res, pendingOptions{}, errors.New("usage: gh-prr <export|resolve|pending> [args]")
 	default:
-		return "", exp, res, fmt.Errorf("unknown command %q (use export or resolve)", os.Args[1])
+		return "", exp, res, pendingOptions{}, fmt.Errorf("unknown command %q (use export, resolve, or pending)", os.Args[1])
 	}
 }
 
 func main() {
-	cmd, exportOpts, resolveOpts, err := parseArgs()
+	cmd, exportOpts, resolveOpts, pendingOpts, err := parseArgs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -835,5 +1108,20 @@ func main() {
 		} else {
 			fmt.Printf("Resolved %d thread(s).\n", count)
 		}
+
+	case cmdPending:
+		prNumber, err := resolvePRNumber(pendingOpts.prNumber)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		prInfo, review, err := fetchPendingReview(owner, repo, prNumber)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Print(renderPendingMarkdown(prInfo, review, pendingOpts.ctx))
 	}
 }
