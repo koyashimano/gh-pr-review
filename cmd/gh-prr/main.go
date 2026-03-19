@@ -692,7 +692,7 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 			continue
 		}
 
-		for _, comment := range comments {
+		for i, comment := range comments {
 			author := "?"
 			if comment.Author != nil && comment.Author.Login != "" {
 				author = comment.Author.Login
@@ -706,7 +706,7 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 				out = append(out, fmt.Sprintf("- URL: %s", url))
 			}
 			out = append(out, "")
-			if strings.TrimSpace(comment.DiffHunk) != "" {
+			if i == 0 && strings.TrimSpace(comment.DiffHunk) != "" {
 				diffBlock := abbreviateDiffHunk(comment.DiffHunk, ctx)
 				out = append(out, "```diff")
 				out = append(out, diffBlock)
