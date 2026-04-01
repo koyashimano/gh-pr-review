@@ -892,6 +892,7 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 	query := `query($owner: String!, $repo: String!, $number: Int!) {
 		repository(owner: $owner, name: $repo) {
 			pullRequest(number: $number) {
+				number
 				reviews { totalCount }
 				latestReviews: reviews(last: 1) {
 					nodes {
@@ -915,7 +916,8 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 	var resp struct {
 		Data struct {
 			Repository struct {
-				PullRequest struct {
+				PullRequest *struct {
+					Number int `json:"number"`
 					Reviews struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"reviews"`
@@ -938,6 +940,10 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 	}
 
 	pr := resp.Data.Repository.PullRequest
+	if pr == nil {
+		return nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
+	}
+
 	summary := &reviewSummary{
 		TotalCount: pr.Reviews.TotalCount,
 	}

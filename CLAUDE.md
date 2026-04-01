@@ -34,6 +34,6 @@ Key flow:
 4. For **export**: `fetchThreads()` → paginate GraphQL reviewThreads (+ `fetchAllComments()` for overflow) → `renderMarkdown()`
 5. For **resolve**: `fetchUnresolvedThreadIDs()` → `resolveAllThreads()` with concurrent goroutines (max 10) calling `resolveThread()` mutation
 6. For **pending**: `fetchPendingReview()` → fetch PENDING state reviews via GraphQL (+ `fetchAllPendingReviewComments()` for overflow) → `renderPendingMarkdown()`
-7. For **wait**: `fetchReviews()` via REST API → poll in loop with `time.Sleep` → print latest review on detection
+7. For **wait**: `fetchReviewSummary()` via GraphQL (`gh api graphql`) → poll in loop with `time.Sleep` → print latest review summary on detection
 
 All GitHub API calls go through `run()` → `ghJSON()` which shells out to `gh api graphql` (or `gh api` for REST).

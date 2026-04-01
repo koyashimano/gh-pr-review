@@ -15,4 +15,4 @@
 - Show pending (unsubmitted) review comments:
   - `gh-prr pending [pr_number] [-c N]` (defaults to current branch PR)
 - Wait for a new review on a PR:
-  - `gh-prr wait [pr_number] [-i N] [-t N]` (poll every N seconds, timeout after N seconds; defaults: 30s interval, 900s timeout)
+  - `gh-prr wait [pr_number] [-i N|-interval N] [-t N|-timeout N]` (poll every N seconds, timeout after N seconds; defaults: 30s interval, 900s timeout)
