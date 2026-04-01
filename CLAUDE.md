@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Three subcommands:
+`gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Four subcommands:
 
 - **export**: Fetch review threads and output as Markdown (`gh-prr export [pr_number] [-c N] [--unresolved-only]`)
 - **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [pr_number]`)
 - **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [pr_number] [-c N]`)
+- **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [pr_number] [-i N] [-t N]`)
 
 All commands default to the PR associated with the current branch if no PR number is given.
 
@@ -33,5 +34,6 @@ Key flow:
 4. For **export**: `fetchThreads()` → paginate GraphQL reviewThreads (+ `fetchAllComments()` for overflow) → `renderMarkdown()`
 5. For **resolve**: `fetchUnresolvedThreadIDs()` → `resolveAllThreads()` with concurrent goroutines (max 10) calling `resolveThread()` mutation
 6. For **pending**: `fetchPendingReview()` → fetch PENDING state reviews via GraphQL (+ `fetchAllPendingReviewComments()` for overflow) → `renderPendingMarkdown()`
+7. For **wait**: `fetchReviews()` via REST API → poll in loop with `time.Sleep` → print latest review on detection
 
-All GitHub API calls go through `run()` → `ghJSON()` which shells out to `gh api graphql`.
+All GitHub API calls go through `run()` → `ghJSON()` which shells out to `gh api graphql` (or `gh api` for REST).
