@@ -24,6 +24,8 @@ const (
 	cmdWait    command = "wait"
 )
 
+var errTimeout = errors.New("timeout: no new review detected")
+
 const gqlQuery = `
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -882,15 +884,32 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 }
 
 func fetchReviews(owner, repo string, prNumber int) ([]prReview, error) {
-	cmd := []string{
-		"gh", "api",
-		fmt.Sprintf("repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, prNumber),
+	var allReviews []prReview
+
+	const perPage = 100
+	for page := 1; ; page++ {
+		cmd := []string{
+			"gh", "api",
+			fmt.Sprintf("repos/%s/%s/pulls/%d/reviews?per_page=%d&page=%d", owner, repo, prNumber, perPage, page),
+		}
+
+		var pageReviews []prReview
+		if err := ghJSON(cmd, &pageReviews); err != nil {
+			return nil, err
+		}
+
+		if len(pageReviews) == 0 {
+			break
+		}
+
+		allReviews = append(allReviews, pageReviews...)
+
+		if len(pageReviews) < perPage {
+			break
+		}
 	}
-	var reviews []prReview
-	if err := ghJSON(cmd, &reviews); err != nil {
-		return nil, err
-	}
-	return reviews, nil
+
+	return allReviews, nil
 }
 
 func runWait(owner, repo string, opts waitOptions) error {
@@ -912,12 +931,17 @@ func runWait(owner, repo string, opts waitOptions) error {
 	fmt.Fprintf(os.Stderr, "Checking every %ds, timeout in %ds... (Ctrl+C to stop)\n", opts.interval, opts.timeout)
 
 	for {
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
-			return fmt.Errorf("timeout")
+			return errTimeout
 		}
 
-		time.Sleep(interval)
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
 
 		reviews, err := fetchReviews(owner, repo, prNumber)
 		if err != nil {
@@ -1233,7 +1257,7 @@ func main() {
 
 	case cmdWait:
 		if err := runWait(owner, repo, waitOpts); err != nil {
-			if err.Error() == "timeout" {
+			if errors.Is(err, errTimeout) {
 				os.Exit(1)
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
