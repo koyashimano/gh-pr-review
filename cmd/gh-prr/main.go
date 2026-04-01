@@ -883,33 +883,75 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 	return ids, nil
 }
 
-func fetchReviews(owner, repo string, prNumber int) ([]prReview, error) {
-	var allReviews []prReview
+type reviewSummary struct {
+	TotalCount int
+	Latest     *prReview
+}
 
-	const perPage = 100
-	for page := 1; ; page++ {
-		cmd := []string{
-			"gh", "api",
-			fmt.Sprintf("repos/%s/%s/pulls/%d/reviews?per_page=%d&page=%d", owner, repo, prNumber, perPage, page),
+func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error) {
+	query := `query($owner: String!, $repo: String!, $number: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $number) {
+				reviews { totalCount }
+				latestReviews: reviews(last: 1) {
+					nodes {
+						author { login }
+						state
+						body
+					}
+				}
+			}
 		}
+	}`
 
-		var pageReviews []prReview
-		if err := ghJSON(cmd, &pageReviews); err != nil {
-			return nil, err
-		}
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", query),
+		"-F", fmt.Sprintf("owner=%s", owner),
+		"-F", fmt.Sprintf("repo=%s", repo),
+		"-F", fmt.Sprintf("number=%d", prNumber),
+	}
 
-		if len(pageReviews) == 0 {
-			break
-		}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					Reviews struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"reviews"`
+					LatestReviews struct {
+						Nodes []struct {
+							Author struct {
+								Login string `json:"login"`
+							} `json:"author"`
+							State string `json:"state"`
+							Body  string `json:"body"`
+						} `json:"nodes"`
+					} `json:"latestReviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
 
-		allReviews = append(allReviews, pageReviews...)
+	if err := ghJSON(cmd, &resp); err != nil {
+		return nil, err
+	}
 
-		if len(pageReviews) < perPage {
-			break
+	pr := resp.Data.Repository.PullRequest
+	summary := &reviewSummary{
+		TotalCount: pr.Reviews.TotalCount,
+	}
+
+	if nodes := pr.LatestReviews.Nodes; len(nodes) > 0 {
+		n := nodes[0]
+		summary.Latest = &prReview{
+			User:  &user{Login: n.Author.Login},
+			State: n.State,
+			Body:  n.Body,
 		}
 	}
 
-	return allReviews, nil
+	return summary, nil
 }
 
 func runWait(owner, repo string, opts waitOptions) error {
@@ -918,11 +960,11 @@ func runWait(owner, repo string, opts waitOptions) error {
 		return err
 	}
 
-	initialReviews, err := fetchReviews(owner, repo, prNumber)
+	initial, err := fetchReviewSummary(owner, repo, prNumber)
 	if err != nil {
 		return fmt.Errorf("failed to fetch initial reviews: %w", err)
 	}
-	initialCount := len(initialReviews)
+	initialCount := initial.TotalCount
 
 	interval := time.Duration(opts.interval) * time.Second
 	deadline := time.Now().Add(time.Duration(opts.timeout) * time.Second)
@@ -943,23 +985,29 @@ func runWait(owner, repo string, opts waitOptions) error {
 		}
 		time.Sleep(sleep)
 
-		reviews, err := fetchReviews(owner, repo, prNumber)
+		if time.Until(deadline) <= 0 {
+			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
+			return errTimeout
+		}
+
+		summary, err := fetchReviewSummary(owner, repo, prNumber)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\nWarning: failed to fetch reviews: %v\n", err)
 			continue
 		}
 
-		if len(reviews) > initialCount {
+		if summary.TotalCount > initialCount {
 			fmt.Fprintf(os.Stderr, "\n")
-			latest := reviews[len(reviews)-1]
-			login := "unknown"
-			if latest.User != nil && latest.User.Login != "" {
-				login = latest.User.Login
-			}
 			fmt.Println("New review detected!")
-			fmt.Printf("%s — %s\n", login, latest.State)
-			if body := strings.TrimSpace(latest.Body); body != "" {
-				fmt.Println(body)
+			if summary.Latest != nil {
+				login := "unknown"
+				if summary.Latest.User != nil && summary.Latest.User.Login != "" {
+					login = summary.Latest.User.Login
+				}
+				fmt.Printf("%s — %s\n", login, summary.Latest.State)
+				if body := strings.TrimSpace(summary.Latest.Body); body != "" {
+					fmt.Println(body)
+				}
 			}
 			return nil
 		}
