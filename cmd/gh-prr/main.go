@@ -923,7 +923,7 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 					} `json:"reviews"`
 					LatestReviews struct {
 						Nodes []struct {
-							Author struct {
+							Author *struct {
 								Login string `json:"login"`
 							} `json:"author"`
 							State string `json:"state"`
@@ -933,10 +933,16 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 				} `json:"pullRequest"`
 			} `json:"repository"`
 		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
 	}
 
 	if err := ghJSON(cmd, &resp); err != nil {
 		return nil, err
+	}
+
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return nil, fmt.Errorf("GraphQL errors: %s", string(blob))
 	}
 
 	pr := resp.Data.Repository.PullRequest
@@ -950,11 +956,14 @@ func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error
 
 	if nodes := pr.LatestReviews.Nodes; len(nodes) > 0 {
 		n := nodes[0]
-		summary.Latest = &prReview{
-			User:  &user{Login: n.Author.Login},
+		review := &prReview{
 			State: n.State,
 			Body:  n.Body,
 		}
+		if n.Author != nil {
+			review.User = &user{Login: n.Author.Login}
+		}
+		summary.Latest = review
 	}
 
 	return summary, nil
@@ -966,14 +975,32 @@ func runWait(owner, repo string, opts waitOptions) error {
 		return err
 	}
 
-	initial, err := fetchReviewSummary(owner, repo, prNumber)
-	if err != nil {
-		return fmt.Errorf("failed to fetch initial reviews: %w", err)
-	}
-	initialCount := initial.TotalCount
-
 	interval := time.Duration(opts.interval) * time.Second
 	deadline := time.Now().Add(time.Duration(opts.timeout) * time.Second)
+
+	var initial *reviewSummary
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
+			return errTimeout
+		}
+
+		initial, err = fetchReviewSummary(owner, repo, prNumber)
+		if err == nil {
+			break
+		}
+
+		fmt.Fprintf(os.Stderr, "Warning: failed to fetch reviews: %v\n", err)
+
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+
+	initialCount := initial.TotalCount
 
 	fmt.Fprintf(os.Stderr, "Watching PR #%d in %s/%s (current reviews: %d)\n", prNumber, owner, repo, initialCount)
 	fmt.Fprintf(os.Stderr, "Checking every %ds, timeout in %ds... (Ctrl+C to stop)\n", opts.interval, opts.timeout)

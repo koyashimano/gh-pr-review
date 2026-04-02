@@ -36,4 +36,4 @@ Key flow:
 6. For **pending**: `fetchPendingReview()` → fetch PENDING state reviews via GraphQL (+ `fetchAllPendingReviewComments()` for overflow) → `renderPendingMarkdown()`
 7. For **wait**: `fetchReviewSummary()` via GraphQL (`gh api graphql`) → poll in loop with `time.Sleep` → print latest review summary on detection
 
-All GitHub API calls go through `run()` → `ghJSON()` which shells out to `gh api graphql` (or `gh api` for REST).
+All GitHub GraphQL API calls go through `run()` → `ghJSON()`, which shells out to `gh api graphql`. Repository and PR discovery use other `gh` subcommands such as `gh repo view` and `gh pr view`.
