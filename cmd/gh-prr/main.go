@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type command string
@@ -20,7 +21,10 @@ const (
 	cmdExport  command = "export"
 	cmdResolve command = "resolve"
 	cmdPending command = "pending"
+	cmdWait    command = "wait"
 )
+
+var errTimeout = errors.New("timeout: no new review detected")
 
 const gqlQuery = `
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
@@ -258,6 +262,12 @@ type user struct {
 	Login string `json:"login"`
 }
 
+type prReview struct {
+	User  *user  `json:"user"`
+	State string `json:"state"`
+	Body  string `json:"body"`
+}
+
 type pageInfo struct {
 	HasNextPage bool   `json:"hasNextPage"`
 	EndCursor   string `json:"endCursor"`
@@ -298,6 +308,12 @@ type resolveOptions struct {
 
 type pendingOptions struct {
 	ctx      int
+	prNumber *int
+}
+
+type waitOptions struct {
+	interval int
+	timeout  int
 	prNumber *int
 }
 
@@ -867,6 +883,172 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 	return ids, nil
 }
 
+type reviewSummary struct {
+	TotalCount int
+	Latest     *prReview
+}
+
+func fetchReviewSummary(owner, repo string, prNumber int) (*reviewSummary, error) {
+	query := `query($owner: String!, $repo: String!, $number: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $number) {
+				number
+				reviews { totalCount }
+				latestReviews: reviews(last: 1) {
+					nodes {
+						author { login }
+						state
+						body
+					}
+				}
+			}
+		}
+	}`
+
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", query),
+		"-F", fmt.Sprintf("owner=%s", owner),
+		"-F", fmt.Sprintf("repo=%s", repo),
+		"-F", fmt.Sprintf("number=%d", prNumber),
+	}
+
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest *struct {
+					Number int `json:"number"`
+					Reviews struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"reviews"`
+					LatestReviews struct {
+						Nodes []struct {
+							Author *struct {
+								Login string `json:"login"`
+							} `json:"author"`
+							State string `json:"state"`
+							Body  string `json:"body"`
+						} `json:"nodes"`
+					} `json:"latestReviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
+	}
+
+	if err := ghJSON(cmd, &resp); err != nil {
+		return nil, err
+	}
+
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return nil, fmt.Errorf("GraphQL errors: %s", string(blob))
+	}
+
+	pr := resp.Data.Repository.PullRequest
+	if pr == nil {
+		return nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
+	}
+
+	summary := &reviewSummary{
+		TotalCount: pr.Reviews.TotalCount,
+	}
+
+	if nodes := pr.LatestReviews.Nodes; len(nodes) > 0 {
+		n := nodes[0]
+		review := &prReview{
+			State: n.State,
+			Body:  n.Body,
+		}
+		if n.Author != nil {
+			review.User = &user{Login: n.Author.Login}
+		}
+		summary.Latest = review
+	}
+
+	return summary, nil
+}
+
+func runWait(owner, repo string, opts waitOptions) error {
+	prNumber, err := resolvePRNumber(opts.prNumber)
+	if err != nil {
+		return err
+	}
+
+	interval := time.Duration(opts.interval) * time.Second
+	deadline := time.Now().Add(time.Duration(opts.timeout) * time.Second)
+
+	var initial *reviewSummary
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
+			return errTimeout
+		}
+
+		initial, err = fetchReviewSummary(owner, repo, prNumber)
+		if err == nil {
+			break
+		}
+
+		fmt.Fprintf(os.Stderr, "Warning: failed to fetch reviews: %v\n", err)
+
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+
+	initialCount := initial.TotalCount
+
+	fmt.Fprintf(os.Stderr, "Watching PR #%d in %s/%s (current reviews: %d)\n", prNumber, owner, repo, initialCount)
+	fmt.Fprintf(os.Stderr, "Checking every %ds, timeout in %ds... (Ctrl+C to stop)\n", opts.interval, opts.timeout)
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
+			return errTimeout
+		}
+
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+
+		if time.Until(deadline) <= 0 {
+			fmt.Fprintf(os.Stderr, "\nTimed out after %ds, no new review.\n", opts.timeout)
+			return errTimeout
+		}
+
+		summary, err := fetchReviewSummary(owner, repo, prNumber)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nWarning: failed to fetch reviews: %v\n", err)
+			continue
+		}
+
+		if summary.TotalCount > initialCount {
+			fmt.Fprintf(os.Stderr, "\n")
+			fmt.Println("New review detected!")
+			if summary.Latest != nil {
+				login := "unknown"
+				if summary.Latest.User != nil && summary.Latest.User.Login != "" {
+					login = summary.Latest.User.Login
+				}
+				fmt.Printf("%s — %s\n", login, summary.Latest.State)
+				if body := strings.TrimSpace(summary.Latest.Body); body != "" {
+					fmt.Println(body)
+				}
+			}
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, ".")
+	}
+}
+
 func resolveThread(threadID string) error {
 	cmd := []string{
 		"gh", "api", "graphql",
@@ -965,12 +1147,12 @@ func parsePRArg(args []string) (*int, error) {
 	return &prNumber, nil
 }
 
-func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, error) {
+func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, waitOptions, error) {
 	var exp exportOptions
 	var res resolveOptions
 
 	if len(os.Args) < 2 {
-		return "", exp, res, pendingOptions{}, errors.New("command required: export, resolve, or pending")
+		return "", exp, res, pendingOptions{}, waitOptions{}, errors.New("command required: export, resolve, pending, or wait")
 	}
 
 	switch os.Args[1] {
@@ -986,21 +1168,21 @@ func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, error)
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			msg := strings.TrimSpace(buf.String())
 			if msg == "" {
-				return "", exp, res, pendingOptions{}, err
+				return "", exp, res, pendingOptions{}, waitOptions{}, err
 			}
-			return "", exp, res, pendingOptions{}, errors.New(msg)
+			return "", exp, res, pendingOptions{}, waitOptions{}, errors.New(msg)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return "", exp, res, pendingOptions{}, err
+			return "", exp, res, pendingOptions{}, waitOptions{}, err
 		}
 		exp.prNumber = prArg
 
 		if exp.ctx < 1 {
 			exp.ctx = 1
 		}
-		return cmdExport, exp, res, pendingOptions{}, nil
+		return cmdExport, exp, res, pendingOptions{}, waitOptions{}, nil
 
 	case string(cmdResolve):
 		fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
@@ -1010,18 +1192,18 @@ func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, error)
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			msg := strings.TrimSpace(buf.String())
 			if msg == "" {
-				return "", exp, res, pendingOptions{}, err
+				return "", exp, res, pendingOptions{}, waitOptions{}, err
 			}
-			return "", exp, res, pendingOptions{}, errors.New(msg)
+			return "", exp, res, pendingOptions{}, waitOptions{}, errors.New(msg)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return "", exp, res, pendingOptions{}, err
+			return "", exp, res, pendingOptions{}, waitOptions{}, err
 		}
 		res.prNumber = prArg
 
-		return cmdResolve, exp, res, pendingOptions{}, nil
+		return cmdResolve, exp, res, pendingOptions{}, waitOptions{}, nil
 
 	case string(cmdPending):
 		fs := flag.NewFlagSet("pending", flag.ContinueOnError)
@@ -1035,31 +1217,64 @@ func parseArgs() (command, exportOptions, resolveOptions, pendingOptions, error)
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			msg := strings.TrimSpace(buf.String())
 			if msg == "" {
-				return "", exp, res, pend, err
+				return "", exp, res, pend, waitOptions{}, err
 			}
-			return "", exp, res, pend, errors.New(msg)
+			return "", exp, res, pend, waitOptions{}, errors.New(msg)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return "", exp, res, pend, err
+			return "", exp, res, pend, waitOptions{}, err
 		}
 		pend.prNumber = prArg
 
 		if pend.ctx < 1 {
 			pend.ctx = 1
 		}
-		return cmdPending, exp, res, pend, nil
+		return cmdPending, exp, res, pend, waitOptions{}, nil
+
+	case string(cmdWait):
+		fs := flag.NewFlagSet("wait", flag.ContinueOnError)
+		var buf bytes.Buffer
+		fs.SetOutput(&buf)
+
+		var wait waitOptions
+		fs.IntVar(&wait.interval, "i", 30, "Polling interval in seconds.")
+		fs.IntVar(&wait.interval, "interval", 30, "Alias for -i.")
+		fs.IntVar(&wait.timeout, "t", 900, "Timeout in seconds (default 900 = 15 minutes).")
+		fs.IntVar(&wait.timeout, "timeout", 900, "Alias for -t.")
+
+		if err := fs.Parse(os.Args[2:]); err != nil {
+			msg := strings.TrimSpace(buf.String())
+			if msg == "" {
+				return "", exp, res, pendingOptions{}, wait, err
+			}
+			return "", exp, res, pendingOptions{}, wait, errors.New(msg)
+		}
+
+		prArg, err := parsePRArg(fs.Args())
+		if err != nil {
+			return "", exp, res, pendingOptions{}, wait, err
+		}
+		wait.prNumber = prArg
+
+		if wait.interval < 1 {
+			wait.interval = 1
+		}
+		if wait.timeout < 1 {
+			wait.timeout = 1
+		}
+		return cmdWait, exp, res, pendingOptions{}, wait, nil
 
 	case "-h", "--help":
-		return "", exp, res, pendingOptions{}, errors.New("usage: gh-prr <export|resolve|pending> [args]")
+		return "", exp, res, pendingOptions{}, waitOptions{}, errors.New("usage: gh-prr <export|resolve|pending|wait> [args]")
 	default:
-		return "", exp, res, pendingOptions{}, fmt.Errorf("unknown command %q (use export, resolve, or pending)", os.Args[1])
+		return "", exp, res, pendingOptions{}, waitOptions{}, fmt.Errorf("unknown command %q (use export, resolve, pending, or wait)", os.Args[1])
 	}
 }
 
 func main() {
-	cmd, exportOpts, resolveOpts, pendingOpts, err := parseArgs()
+	cmd, exportOpts, resolveOpts, pendingOpts, waitOpts, err := parseArgs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -1120,5 +1335,14 @@ func main() {
 		}
 
 		fmt.Print(renderPendingMarkdown(prInfo, review, pendingOpts.ctx))
+
+	case cmdWait:
+		if err := runWait(owner, repo, waitOpts); err != nil {
+			if errors.Is(err, errTimeout) {
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
