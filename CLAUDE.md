@@ -6,10 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Four subcommands:
 
-- **export**: Fetch review threads and output as Markdown (`gh-prr export [pr_number] [-c N] [--unresolved-only]`)
+- **export**: Fetch review threads and output as Markdown (`gh-prr export [-c N] [--unresolved-only] [pr_number]`)
 - **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [pr_number]`)
-- **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [pr_number] [-c N]`)
-- **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [pr_number] [-i N] [-t N]`)
+- **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [-c N] [pr_number]`)
+- **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [-i N] [-t N] [pr_number]`)
+
+Flags must precede the optional `pr_number` (Go's `flag` package stops parsing at the first non-flag argument).
 
 All commands default to the PR associated with the current branch if no PR number is given.
 

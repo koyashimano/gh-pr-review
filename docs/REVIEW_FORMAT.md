@@ -107,8 +107,10 @@ Everything after the header up to the next inline comment header (or end of file
 ## CLI
 
 ```
-gh-prr submit [pr_number] -f review.md [--pending]
+gh-prr submit -f review.md [--pending] [pr_number]
 ```
+
+Flags must precede the optional `pr_number` positional argument.
 
 - `-f, --file` — path to the Markdown file. Use `-` to read from standard input. Required.
 - `--pending` — submit as a pending (draft) review. The `event` from front matter is ignored.
@@ -126,10 +128,10 @@ When the file also contains one or more file-level comments (`## file: <path>`),
 If a step after (1) fails, the partially built review is left in pending state — re-run with `gh-prr submit-pending` to finish it, or delete it via the GitHub UI.
 
 ```
-gh-prr submit-pending [pr_number] [-e EVENT]
+gh-prr submit-pending [-e EVENT] [pr_number]
 ```
 
-Submits the current user's existing pending review on the PR.
+Submits the current user's existing pending review on the PR. Flags must precede the optional `pr_number`.
 
 - `-e, --event` — `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`. Default `COMMENT`.
 
