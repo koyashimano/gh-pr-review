@@ -1327,37 +1327,41 @@ func parseInlineHeaderAttrs(attrs string, c *reviewComment) error {
 	return nil
 }
 
-func parseInlineHeader(line string) (*reviewComment, bool, error) {
-	if fm := fileHeaderRe.FindStringSubmatch(line); fm != nil {
+func parseInlineHeader(line string) (*reviewComment, error) {
+	if strings.HasPrefix(line, fileHeaderPrefix) {
+		fm := fileHeaderRe.FindStringSubmatch(line)
+		if fm == nil {
+			return nil, fmt.Errorf("malformed file-level header %q (expected `## file: <path>`)", line)
+		}
 		path := strings.TrimSpace(fm[1])
 		if path == "" {
-			return nil, true, fmt.Errorf("missing path in header %q", line)
+			return nil, fmt.Errorf("missing path in header %q", line)
 		}
 		if strings.ContainsAny(path, "[]") {
-			return nil, true, fmt.Errorf("attribute lists are not allowed on file-level headers (%q)", line)
+			return nil, fmt.Errorf("attribute lists are not allowed on file-level headers (%q)", line)
 		}
 		if strings.Contains(path, `\`) {
-			return nil, true, fmt.Errorf("backslashes are not supported in path %q (use forward slashes)", path)
+			return nil, fmt.Errorf("backslashes are not supported in path %q (use forward slashes)", path)
 		}
-		return &reviewComment{Path: path, SubjectFile: true}, true, nil
-	}
-	if strings.HasPrefix(line, fileHeaderPrefix) {
-		return nil, true, fmt.Errorf("malformed file-level header %q (expected `## file: <path>`)", line)
+		return &reviewComment{Path: path, SubjectFile: true}, nil
 	}
 
 	m := inlineHeaderRe.FindStringSubmatch(line)
 	if m == nil {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	path := strings.TrimSpace(m[1])
 	if path == "" {
-		return nil, false, nil
+		return nil, nil
+	}
+	if strings.Contains(path, `\`) {
+		return nil, fmt.Errorf("backslashes are not supported in path %q (use forward slashes)", path)
 	}
 
 	first, err := strconv.Atoi(m[2])
 	if err != nil || first < 1 {
-		return nil, true, fmt.Errorf("invalid line number in header %q", line)
+		return nil, fmt.Errorf("invalid line number in header %q", line)
 	}
 
 	c := &reviewComment{Path: path, Line: first}
@@ -1365,10 +1369,10 @@ func parseInlineHeader(line string) (*reviewComment, bool, error) {
 	if m[3] != "" {
 		end, err := strconv.Atoi(m[3])
 		if err != nil || end < 1 {
-			return nil, true, fmt.Errorf("invalid end line in header %q", line)
+			return nil, fmt.Errorf("invalid end line in header %q", line)
 		}
 		if first >= end {
-			return nil, true, fmt.Errorf("start line %d must be less than end line %d in header %q", first, end, line)
+			return nil, fmt.Errorf("start line %d must be less than end line %d in header %q", first, end, line)
 		}
 		start := first
 		c.StartLine = &start
@@ -1377,15 +1381,15 @@ func parseInlineHeader(line string) (*reviewComment, bool, error) {
 
 	if m[4] != "" {
 		if err := parseInlineHeaderAttrs(m[4], c); err != nil {
-			return nil, true, fmt.Errorf("%w in header %q", err, line)
+			return nil, fmt.Errorf("%w in header %q", err, line)
 		}
 	}
 
 	if c.StartLine == nil && c.StartSide != "" {
-		return nil, true, fmt.Errorf("start_side specified without a line range in header %q", line)
+		return nil, fmt.Errorf("start_side specified without a line range in header %q", line)
 	}
 
-	return c, true, nil
+	return c, nil
 }
 
 func trimBlankLines(lines []string) string {
@@ -1429,7 +1433,7 @@ func parseReviewMarkdown(content string) (reviewSubmission, error) {
 			} else {
 				loc = fmt.Sprintf("%s:%d", current.Path, current.Line)
 			}
-			return fmt.Errorf("inline comment for %s has empty body", loc)
+			return fmt.Errorf("review comment for %s has empty body", loc)
 		}
 		current.Body = body
 		sub.Comments = append(sub.Comments, *current)
@@ -1439,11 +1443,11 @@ func parseReviewMarkdown(content string) (reviewSubmission, error) {
 	}
 
 	for _, line := range lines {
-		c, isHeader, err := parseInlineHeader(line)
+		c, err := parseInlineHeader(line)
 		if err != nil {
 			return sub, err
 		}
-		if isHeader {
+		if c != nil {
 			if current != nil {
 				if err := flushCurrent(); err != nil {
 					return sub, err
@@ -1499,7 +1503,7 @@ type submitReviewCommentJSON struct {
 
 type submitReviewRequestJSON struct {
 	CommitID string                    `json:"commit_id,omitempty"`
-	Body     string                    `json:"body,omitempty"`
+	Body     string                    `json:"body"`
 	Event    string                    `json:"event,omitempty"`
 	Comments []submitReviewCommentJSON `json:"comments,omitempty"`
 }
@@ -1574,7 +1578,9 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 		}
 		for i, c := range fileComments {
 			if err := addFileLevelThread(resp.NodeID, c.Path, c.Body); err != nil {
-				return resp.HTMLURL, resp.State, fmt.Errorf("review created as pending with %d/%d file-level comment(s) attached; failed on %s: %w; review left pending — finish or delete it via the GitHub UI or `gh-prr submit-pending`", i, len(fileComments), c.Path, err)
+				fmt.Fprintf(os.Stderr, "warning: review left pending with %d/%d file-level comment(s) attached\n", i, len(fileComments))
+				fmt.Fprintln(os.Stderr, "hint: finish or delete the pending review via the GitHub UI or `gh-prr submit-pending`")
+				return resp.HTMLURL, resp.State, fmt.Errorf("failed to attach file-level comment for %s: %w", c.Path, err)
 			}
 		}
 	}
@@ -1582,7 +1588,9 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 	if hasFileComments && !pending {
 		url, state, err := submitPendingReview(resp.NodeID, sub.Event)
 		if err != nil {
-			return resp.HTMLURL, resp.State, fmt.Errorf("review and all comments created, but failed to finalize submit: %w; review left pending — finalize with `gh-prr submit-pending`", err)
+			fmt.Fprintln(os.Stderr, "warning: review and all comments created, but finalize step failed; review left pending")
+			fmt.Fprintln(os.Stderr, "hint: finalize with `gh-prr submit-pending`")
+			return resp.HTMLURL, resp.State, fmt.Errorf("failed to finalize review: %w", err)
 		}
 		return url, state, nil
 	}
@@ -1940,12 +1948,6 @@ func main() {
 		}
 
 	case cmdSubmit:
-		prNumber, err := resolvePRNumber(args.submit.prNumber)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-
 		content, err := readReviewFile(args.submit.file)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1959,6 +1961,16 @@ func main() {
 		}
 
 		if err := validateReviewSubmission(sub, args.submit.pending); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if args.submit.pending && (sub.Event == "APPROVE" || sub.Event == "REQUEST_CHANGES") {
+			fmt.Fprintf(os.Stderr, "warning: --pending is set; front matter event %q will be ignored (use `gh-prr submit-pending -e %s` after to finalize)\n", sub.Event, sub.Event)
+		}
+
+		prNumber, err := resolvePRNumber(args.submit.prNumber)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

@@ -137,7 +137,10 @@ Submits the current user's existing pending review on the PR. Flags must precede
 
 ## Round-trip with `pending`
 
-`gh-prr pending [pr_number]` prints a Markdown view of the current pending review. Its inline comment headers use the same `## path:line` syntax as `submit`, so a pending review can be exported, edited, and re-submitted by hand. Note: `pending`'s output does not include the `---` front matter block; you must add one before passing it back to `submit`.
+`gh-prr pending [pr_number]` prints a Markdown view of the current pending review. Its inline comment headers use the same `## path:line` syntax as `submit`, so a pending review can be exported, edited, and re-submitted by hand. Two things to do before passing the output back to `submit`:
+
+- Prepend a `---` front matter block (the `pending` output does not include one).
+- Remove the ` ```diff ` blocks under each header — `pending` includes them as context, but `submit` treats everything after the header as the comment body, so leaving them in re-posts the diff hunk as part of the comment.
 
 ## Examples
 

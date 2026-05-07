@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -424,6 +425,115 @@ func TestParseReviewMarkdown_FrontMatterRejectsCommitIDAlias(t *testing.T) {
 	}
 }
 
+func TestParseReviewMarkdown_FrontMatterCommitOnly(t *testing.T) {
+	in := strings.Join([]string{
+		"---",
+		"commit: abc123",
+		"---",
+		"body",
+	}, "\n")
+	sub, err := parseReviewMarkdown(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Event != "COMMENT" {
+		t.Errorf("event=%q want COMMENT (default)", sub.Event)
+	}
+	if sub.CommitID != "abc123" {
+		t.Errorf("commit=%q want abc123", sub.CommitID)
+	}
+}
+
+func TestParseReviewMarkdown_FrontMatterEmpty(t *testing.T) {
+	in := "---\n---\nbody\n"
+	sub, err := parseReviewMarkdown(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Event != "COMMENT" {
+		t.Errorf("event=%q want COMMENT (default)", sub.Event)
+	}
+	if sub.Body != "body" {
+		t.Errorf("body=%q want body", sub.Body)
+	}
+}
+
+func TestParseReviewMarkdown_FrontMatterEmptyEvent(t *testing.T) {
+	in := "---\nevent:\n---\nbody\n"
+	if _, err := parseReviewMarkdown(in); err == nil {
+		t.Fatal("expected error for empty event value")
+	}
+}
+
+func TestParseReviewMarkdown_LineAnchoredRejectsBackslash(t *testing.T) {
+	in := "## a\\b\\c.go:42\nbody\n"
+	_, err := parseReviewMarkdown(in)
+	if err == nil {
+		t.Fatal("expected error for backslash in line-anchored path")
+	}
+	if !strings.Contains(err.Error(), "backslashes are not supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSubmitReviewRequestJSON_BodyAlwaysIncluded(t *testing.T) {
+	// Even when the review has only file-level comments and an empty body,
+	// the REST POST must include "body" so the request isn't an empty {}.
+	req := submitReviewRequestJSON{}
+	blob, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(blob)
+	if !strings.Contains(got, `"body":""`) {
+		t.Errorf("expected body field in JSON: %s", got)
+	}
+}
+
+func TestSubmitReviewRequestJSON_FullRequest(t *testing.T) {
+	startLine := 10
+	req := submitReviewRequestJSON{
+		CommitID: "deadbeef",
+		Body:     "summary",
+		Event:    "APPROVE",
+		Comments: []submitReviewCommentJSON{
+			{
+				Path:      "foo.go",
+				Line:      15,
+				Body:      "comment",
+				Side:      "RIGHT",
+				StartLine: &startLine,
+				StartSide: "LEFT",
+			},
+		},
+	}
+	blob, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip map[string]any
+	if err := json.Unmarshal(blob, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip["commit_id"] != "deadbeef" {
+		t.Errorf("commit_id=%v", roundTrip["commit_id"])
+	}
+	if roundTrip["body"] != "summary" {
+		t.Errorf("body=%v", roundTrip["body"])
+	}
+	if roundTrip["event"] != "APPROVE" {
+		t.Errorf("event=%v", roundTrip["event"])
+	}
+	comments, ok := roundTrip["comments"].([]any)
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments=%v", roundTrip["comments"])
+	}
+	c := comments[0].(map[string]any)
+	if c["path"] != "foo.go" || c["start_line"].(float64) != 10 || c["start_side"] != "LEFT" {
+		t.Errorf("comment=%v", c)
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		line     string
@@ -445,14 +555,14 @@ func TestParseInlineHeader_Cases(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.line, func(t *testing.T) {
-			c, ok, err := parseInlineHeader(tc.line)
+			c, err := parseInlineHeader(tc.line)
 			if err != nil {
 				t.Fatalf("unexpected err: %v", err)
 			}
-			if ok != tc.isHeader {
-				t.Fatalf("ok=%v want %v", ok, tc.isHeader)
+			if (c != nil) != tc.isHeader {
+				t.Fatalf("isHeader=%v want %v", c != nil, tc.isHeader)
 			}
-			if !ok {
+			if c == nil {
 				return
 			}
 			if c.Path != tc.path || c.Line != tc.line_ || c.Side != tc.side {
