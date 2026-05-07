@@ -160,6 +160,7 @@ mutation($id: ID!, $path: String!, $body: String!) {
 
 const pendingReviewQuery = `
 query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       number
@@ -303,6 +304,9 @@ type pageInfo struct {
 
 type pendingReviewResponse struct {
 	Data struct {
+		Viewer struct {
+			Login string `json:"login"`
+		} `json:"viewer"`
 		Repository struct {
 			PullRequest struct {
 				Number  int    `json:"number"`
@@ -636,12 +640,18 @@ func fetchPendingReview(owner, repo string, prNumber int) (pullRequest, *pending
 		URL:    pr.URL,
 	}
 
-	reviews := pr.Reviews.Nodes
-	if len(reviews) == 0 {
+	viewerLogin := resp.Data.Viewer.Login
+	var review *pendingReview
+	for i := range pr.Reviews.Nodes {
+		r := pr.Reviews.Nodes[i]
+		if r.Author != nil && r.Author.Login == viewerLogin {
+			review = &r
+			break
+		}
+	}
+	if review == nil {
 		return prInfo, nil, nil
 	}
-
-	review := reviews[0]
 
 	if review.Comments.PageInfo.HasNextPage {
 		fullComments, err := fetchAllPendingReviewComments(review.ID, review.Comments)
@@ -651,7 +661,7 @@ func fetchPendingReview(owner, repo string, prNumber int) (pullRequest, *pending
 		review.Comments = fullComments
 	}
 
-	return prInfo, &review, nil
+	return prInfo, review, nil
 }
 
 func fetchAllPendingReviewComments(reviewID string, existing commentConnection) (commentConnection, error) {
@@ -1258,6 +1268,7 @@ func stripQuotes(s string) string {
 }
 
 func parseFrontMatter(matter string, sub *reviewSubmission) error {
+	seen := map[string]bool{}
 	for _, raw := range strings.Split(matter, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -1269,6 +1280,10 @@ func parseFrontMatter(matter string, sub *reviewSubmission) error {
 		}
 		key := strings.TrimSpace(line[:idx])
 		val := stripQuotes(strings.TrimSpace(line[idx+1:]))
+		if seen[key] {
+			return fmt.Errorf("duplicate front matter key %q", key)
+		}
+		seen[key] = true
 		switch key {
 		case "event":
 			v := strings.ToUpper(val)
@@ -1561,14 +1576,11 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 	}
 
 	var resp struct {
-		ID      json.Number `json:"id"`
-		NodeID  string      `json:"node_id"`
-		HTMLURL string      `json:"html_url"`
-		State   string      `json:"state"`
+		NodeID  string `json:"node_id"`
+		HTMLURL string `json:"html_url"`
+		State   string `json:"state"`
 	}
-	dec := json.NewDecoder(strings.NewReader(out))
-	dec.UseNumber()
-	if err := dec.Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		return "", "", fmt.Errorf("failed to parse review creation response: %w", err)
 	}
 
@@ -1579,7 +1591,7 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 		for i, c := range fileComments {
 			if err := addFileLevelThread(resp.NodeID, c.Path, c.Body); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: review left pending with %d/%d file-level comment(s) attached\n", i, len(fileComments))
-				fmt.Fprintln(os.Stderr, "hint: finish or delete the pending review via the GitHub UI or `gh-prr submit-pending`")
+				fmt.Fprintf(os.Stderr, "hint: finish or delete the pending review via the GitHub UI, or finalize with `gh-prr submit-pending -e %s`\n", sub.Event)
 				return resp.HTMLURL, resp.State, fmt.Errorf("failed to attach file-level comment for %s: %w", c.Path, err)
 			}
 		}
@@ -1589,7 +1601,7 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 		url, state, err := submitPendingReview(resp.NodeID, sub.Event)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "warning: review and all comments created, but finalize step failed; review left pending")
-			fmt.Fprintln(os.Stderr, "hint: finalize with `gh-prr submit-pending`")
+			fmt.Fprintf(os.Stderr, "hint: finalize with `gh-prr submit-pending -e %s`\n", sub.Event)
 			return resp.HTMLURL, resp.State, fmt.Errorf("failed to finalize review: %w", err)
 		}
 		return url, state, nil
@@ -1698,6 +1710,13 @@ func parsePRArg(args []string) (*int, error) {
 
 const usageMessage = "usage: gh-prr <export|resolve|pending|wait|submit|submit-pending> [args]"
 
+func newFlagSet(name string) (*flag.FlagSet, *bytes.Buffer) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	var buf bytes.Buffer
+	fs.SetOutput(&buf)
+	return fs, &buf
+}
+
 func parseFlagSet(fs *flag.FlagSet, buf *bytes.Buffer, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		msg := strings.TrimSpace(buf.String())
@@ -1718,15 +1737,13 @@ func parseArgs() (parsedArgs, error) {
 
 	switch os.Args[1] {
 	case string(cmdExport):
-		fs := flag.NewFlagSet("export", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("export")
 
 		fs.IntVar(&p.export.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk (alias: -context).")
 		fs.IntVar(&p.export.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
 		fs.BoolVar(&p.export.unresolvedOnly, "unresolved-only", false, "Show only unresolved threads.")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 
@@ -1743,11 +1760,9 @@ func parseArgs() (parsedArgs, error) {
 		return p, nil
 
 	case string(cmdResolve):
-		fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("resolve")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 
@@ -1761,14 +1776,12 @@ func parseArgs() (parsedArgs, error) {
 		return p, nil
 
 	case string(cmdPending):
-		fs := flag.NewFlagSet("pending", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("pending")
 
 		fs.IntVar(&p.pending.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk (alias: -context).")
 		fs.IntVar(&p.pending.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 
@@ -1785,16 +1798,14 @@ func parseArgs() (parsedArgs, error) {
 		return p, nil
 
 	case string(cmdWait):
-		fs := flag.NewFlagSet("wait", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("wait")
 
 		fs.IntVar(&p.wait.interval, "i", 30, "Polling interval in seconds.")
 		fs.IntVar(&p.wait.interval, "interval", 30, "Alias for -i.")
 		fs.IntVar(&p.wait.timeout, "t", 900, "Timeout in seconds (default 900 = 15 minutes).")
 		fs.IntVar(&p.wait.timeout, "timeout", 900, "Alias for -t.")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 
@@ -1814,15 +1825,13 @@ func parseArgs() (parsedArgs, error) {
 		return p, nil
 
 	case string(cmdSubmit):
-		fs := flag.NewFlagSet("submit", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("submit")
 
 		fs.StringVar(&p.submit.file, "f", "", "Path to the review Markdown file. Use - for stdin. (alias: -file)")
 		fs.StringVar(&p.submit.file, "file", "", "Alias for -f.")
 		fs.BoolVar(&p.submit.pending, "pending", false, "Submit as a pending (draft) review without finalizing.")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 
@@ -1840,14 +1849,12 @@ func parseArgs() (parsedArgs, error) {
 		return p, nil
 
 	case string(cmdSubmitPending):
-		fs := flag.NewFlagSet("submit-pending", flag.ContinueOnError)
-		var buf bytes.Buffer
-		fs.SetOutput(&buf)
+		fs, buf := newFlagSet("submit-pending")
 
 		fs.StringVar(&p.submitPending.event, "e", "COMMENT", "Event to submit with: APPROVE, REQUEST_CHANGES, or COMMENT. (alias: -event)")
 		fs.StringVar(&p.submitPending.event, "event", "COMMENT", "Alias for -e.")
 
-		if err := parseFlagSet(fs, &buf, os.Args[2:]); err != nil {
+		if err := parseFlagSet(fs, buf, os.Args[2:]); err != nil {
 			return p, err
 		}
 

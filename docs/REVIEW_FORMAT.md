@@ -74,7 +74,7 @@ Each inline comment starts with an H2 header that locates the comment.
 
 Rules:
 
-- `<path>` must not contain `:`. GitHub uses forward slashes; backslashes are not supported.
+- `<path>` must not contain `:`. GitHub uses forward slashes; backslashes are not supported. Lines with colons in the path are silently treated as comment body rather than headers, so watch out for typos.
 - `<line>` is the line number in the file at the reviewed commit.
 - For a multi-line comment, `<start_line>-<line>` specifies a range. `start_line` must be strictly less than `line`.
 - The optional bracketed attribute list contains comma-separated `key=value` pairs. Whitespace around keys, values, and commas is ignored.

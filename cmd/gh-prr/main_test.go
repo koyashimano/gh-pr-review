@@ -92,6 +92,17 @@ func TestParseReviewMarkdown_FrontMatterUnclosed(t *testing.T) {
 	}
 }
 
+func TestParseReviewMarkdown_FrontMatterDuplicateKey(t *testing.T) {
+	in := "---\nevent: APPROVE\nevent: COMMENT\n---\nbody\n"
+	_, err := parseReviewMarkdown(in)
+	if err == nil {
+		t.Fatal("expected error for duplicate front matter key")
+	}
+	if !strings.Contains(err.Error(), "duplicate front matter key") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestParseReviewMarkdown_InlineSingleLine(t *testing.T) {
 	in := strings.Join([]string{
 		"Summary.",
@@ -536,10 +547,10 @@ func TestSubmitReviewRequestJSON_FullRequest(t *testing.T) {
 
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
-		line     string
+		header   string
 		isHeader bool
 		path     string
-		line_    int
+		lineNum  int
 		startPtr *int
 		side     string
 	}{
@@ -554,8 +565,8 @@ func TestParseInlineHeader_Cases(t *testing.T) {
 		{"random text", false, "", 0, nil, ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.line, func(t *testing.T) {
-			c, err := parseInlineHeader(tc.line)
+		t.Run(tc.header, func(t *testing.T) {
+			c, err := parseInlineHeader(tc.header)
 			if err != nil {
 				t.Fatalf("unexpected err: %v", err)
 			}
@@ -565,7 +576,7 @@ func TestParseInlineHeader_Cases(t *testing.T) {
 			if c == nil {
 				return
 			}
-			if c.Path != tc.path || c.Line != tc.line_ || c.Side != tc.side {
+			if c.Path != tc.path || c.Line != tc.lineNum || c.Side != tc.side {
 				t.Errorf("got=%+v", c)
 			}
 			if (c.StartLine == nil) != (tc.startPtr == nil) || (c.StartLine != nil && *c.StartLine != *tc.startPtr) {
