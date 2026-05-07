@@ -1278,7 +1278,7 @@ func parseFrontMatter(matter string, sub *reviewSubmission) error {
 			default:
 				return fmt.Errorf("invalid event %q (expected APPROVE, REQUEST_CHANGES, or COMMENT)", val)
 			}
-		case "commit", "commit_id":
+		case "commit":
 			sub.CommitID = val
 		default:
 			return fmt.Errorf("unknown front matter key %q", key)
@@ -1332,6 +1332,12 @@ func parseInlineHeader(line string) (*reviewComment, bool, error) {
 		path := strings.TrimSpace(fm[1])
 		if path == "" {
 			return nil, true, fmt.Errorf("missing path in header %q", line)
+		}
+		if strings.ContainsAny(path, "[]") {
+			return nil, true, fmt.Errorf("attribute lists are not allowed on file-level headers (%q)", line)
+		}
+		if strings.Contains(path, `\`) {
+			return nil, true, fmt.Errorf("backslashes are not supported in path %q (use forward slashes)", path)
 		}
 		return &reviewComment{Path: path, SubjectFile: true}, true, nil
 	}
@@ -1574,11 +1580,11 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 	}
 
 	if hasFileComments && !pending {
-		url, err := submitPendingReview(resp.NodeID, sub.Event)
+		url, state, err := submitPendingReview(resp.NodeID, sub.Event)
 		if err != nil {
 			return resp.HTMLURL, resp.State, fmt.Errorf("review and all comments created, but failed to finalize submit: %w; review left pending — finalize with `gh-prr submit-pending`", err)
 		}
-		return url, sub.Event, nil
+		return url, state, nil
 	}
 
 	return resp.HTMLURL, resp.State, nil
@@ -1620,7 +1626,7 @@ func addFileLevelThread(reviewID, path, body string) error {
 	return nil
 }
 
-func submitPendingReview(reviewID, event string) (string, error) {
+func submitPendingReview(reviewID, event string) (string, string, error) {
 	cmd := []string{
 		"gh", "api", "graphql",
 		"-F", fmt.Sprintf("id=%s", reviewID),
@@ -1641,15 +1647,16 @@ func submitPendingReview(reviewID, event string) (string, error) {
 	}
 
 	if err := ghJSON(cmd, &resp); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if len(resp.Errors) > 0 {
 		blob, _ := json.Marshal(resp.Errors)
-		return "", fmt.Errorf("GraphQL errors: %s", string(blob))
+		return "", "", fmt.Errorf("GraphQL errors: %s", string(blob))
 	}
 
-	return resp.Data.SubmitPullRequestReview.PullRequestReview.URL, nil
+	review := resp.Data.SubmitPullRequestReview.PullRequestReview
+	return review.URL, review.State, nil
 }
 
 func readReviewFile(path string) (string, error) {
@@ -1988,13 +1995,13 @@ func main() {
 			os.Exit(1)
 		}
 
-		url, err := submitPendingReview(review.ID, args.submitPending.event)
+		url, state, err := submitPendingReview(review.ID, args.submitPending.event)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Submitted pending review with event %s.\n", args.submitPending.event)
+		fmt.Printf("Submitted pending review. State: %s\n", state)
 		if url != "" {
 			fmt.Println(url)
 		}

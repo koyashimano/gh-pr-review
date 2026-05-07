@@ -92,11 +92,13 @@ Recognised attribute keys:
 ## file: <path>
 ```
 
-A header in this form attaches the comment to the whole file rather than a specific line. The `file:` prefix is literal and must be followed by at least one space or tab. Attribute lists (`[...]`) are not allowed on file-level headers.
+A header in this form attaches the comment to the whole file rather than a specific line. The `file:` prefix is literal and must be followed by at least one space or tab. Attribute lists (`[...]`) and backslashes in the path are rejected with a parse error.
 
 ### Header recognition
 
 A line is treated as an inline comment header only when it matches one of the patterns above exactly. Other H2-style lines (for example `## Notes` or `## foo:bar`) become part of the surrounding comment body. To put a literal header-shaped line inside a comment, indent it, escape the `#`, or otherwise change the leading characters so it stops matching.
+
+As an exception, any line beginning with `## file:` is assumed to be intended as a file-level header. If it does not match the exact `## file: <path>` pattern (for example `## file:foo.go` with no whitespace, or `## file:` with no path), it is rejected with a parse error rather than treated as body text. This is to catch typos rather than silently swallow them.
 
 ### Comment body
 

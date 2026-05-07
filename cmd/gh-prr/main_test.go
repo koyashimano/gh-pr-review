@@ -395,6 +395,35 @@ func TestParseReviewMarkdown_FileLevelEmptyBody(t *testing.T) {
 	}
 }
 
+func TestParseReviewMarkdown_FileLevelRejectsAttributes(t *testing.T) {
+	in := "## file: foo.go [side=LEFT]\nbody\n"
+	_, err := parseReviewMarkdown(in)
+	if err == nil {
+		t.Fatal("expected error for attribute list on file-level header")
+	}
+	if !strings.Contains(err.Error(), "attribute lists are not allowed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParseReviewMarkdown_FileLevelRejectsBackslash(t *testing.T) {
+	in := "## file: foo\\bar.go\nbody\n"
+	_, err := parseReviewMarkdown(in)
+	if err == nil {
+		t.Fatal("expected error for backslash in file-level path")
+	}
+	if !strings.Contains(err.Error(), "backslashes are not supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParseReviewMarkdown_FrontMatterRejectsCommitIDAlias(t *testing.T) {
+	in := "---\ncommit_id: deadbeef\n---\nbody\n"
+	if _, err := parseReviewMarkdown(in); err == nil {
+		t.Fatal("expected error for unknown front matter key commit_id")
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		line     string
