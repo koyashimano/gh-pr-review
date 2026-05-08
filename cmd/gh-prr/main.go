@@ -720,6 +720,10 @@ func abbreviateDiffHunk(diffHunk string, ctx int) string {
 	return head + "\n…\n" + tail
 }
 
+func isFileLevelComment(c comment) bool {
+	return c.Line == nil && c.StartLine == nil && c.OriginalLine == nil && c.OriginalStartLine == nil
+}
+
 func fmtLoc(path string, startLine, line *int) string {
 	switch {
 	case startLine != nil && line != nil && *startLine != *line:
@@ -878,9 +882,13 @@ func renderPendingMarkdown(pr pullRequest, review *pendingReview, ctx int) strin
 	})
 
 	for _, c := range comments {
-		loc := fmtLoc(c.Path, c.StartLine, c.Line)
-
-		out = append(out, fmt.Sprintf("## %s", loc))
+		var header string
+		if isFileLevelComment(c) {
+			header = fmt.Sprintf("## file: %s", c.Path)
+		} else {
+			header = fmt.Sprintf("## %s", fmtLoc(c.Path, c.StartLine, c.Line))
+		}
+		out = append(out, header)
 
 		out = append(out, "")
 		if strings.TrimSpace(c.DiffHunk) != "" {
@@ -1524,6 +1532,12 @@ type submitReviewRequestJSON struct {
 }
 
 func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pending bool) (string, string, error) {
+	if _, existing, err := fetchPendingReview(owner, repo, prNumber); err != nil {
+		return "", "", fmt.Errorf("failed to check for an existing pending review: %w", err)
+	} else if existing != nil {
+		return "", "", fmt.Errorf("you already have a pending review on this PR (%d inline comment(s) so far); inspect with `gh-prr pending`, finalize with `gh-prr submit-pending`, or delete it via the GitHub UI before creating a new one", len(existing.Comments.Nodes))
+	}
+
 	var lineComments, fileComments []reviewComment
 	for _, c := range sub.Comments {
 		if c.SubjectFile {

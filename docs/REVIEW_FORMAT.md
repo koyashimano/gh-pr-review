@@ -117,6 +117,8 @@ Flags must precede the optional `pr_number` positional argument.
 
 ### Submission flow
 
+GitHub allows at most one pending review per viewer per pull request. Before posting, `gh-prr submit` checks whether the current user already has a pending review on the PR and, if so, fails fast with a hint to inspect it via `gh-prr pending`, finalize it via `gh-prr submit-pending`, or delete it via the GitHub UI.
+
 When the file contains only line-anchored comments and a body, the review is created in a single REST request (`POST /repos/{owner}/{repo}/pulls/{n}/reviews`).
 
 When the file also contains one or more file-level comments (`## file: <path>`), the GitHub REST endpoint cannot send them in the same request. `gh-prr submit` then falls back to a multi-step flow:
@@ -137,7 +139,7 @@ Submits the current user's existing pending review on the PR. Flags must precede
 
 ## Round-trip with `pending`
 
-`gh-prr pending [pr_number]` prints a Markdown view of the current pending review. Its inline comment headers use the same `## path:line` syntax as `submit`, so a pending review can be exported, edited, and re-submitted by hand. Two things to do before passing the output back to `submit`:
+`gh-prr pending [pr_number]` prints a Markdown view of the current pending review. Its inline comment headers use the same syntax as `submit` — `## path:line` for line-anchored comments and `## file: <path>` for file-level comments — so a pending review can be exported, edited, and re-submitted by hand. Two things to do before passing the output back to `submit`:
 
 - Prepend a `---` front matter block (the `pending` output does not include one).
 - Remove the ` ```diff ` blocks under each header — `pending` includes them as context, but `submit` treats everything after the header as the comment body, so leaving them in re-posts the diff hunk as part of the comment.

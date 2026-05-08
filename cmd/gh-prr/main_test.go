@@ -545,6 +545,63 @@ func TestSubmitReviewRequestJSON_FullRequest(t *testing.T) {
 	}
 }
 
+func TestRenderPendingMarkdown_FileLevelHeader(t *testing.T) {
+	pr := pullRequest{Number: 1, Title: "t", URL: "https://example/pr/1"}
+	line5 := 5
+	review := &pendingReview{
+		ID: "rev1",
+		Comments: commentConnection{
+			TotalCount: 2,
+			Nodes: []comment{
+				{
+					Path:      "docs/note.md",
+					Body:      "whole-file feedback",
+					CreatedAt: "2024-01-01T00:00:00Z",
+				},
+				{
+					Path:      "foo.go",
+					Line:      &line5,
+					Body:      "line feedback",
+					CreatedAt: "2024-01-02T00:00:00Z",
+				},
+			},
+		},
+	}
+	got := renderPendingMarkdown(pr, review, 3)
+	if !strings.Contains(got, "## file: docs/note.md\n") {
+		t.Errorf("missing file-level header in:\n%s", got)
+	}
+	if !strings.Contains(got, "## foo.go:5\n") {
+		t.Errorf("missing line header in:\n%s", got)
+	}
+	// The bare path form must NOT be emitted; that broke round-trip into submit.
+	if strings.Contains(got, "## docs/note.md\n") {
+		t.Errorf("file-level header should not be emitted as bare path:\n%s", got)
+	}
+}
+
+func TestIsFileLevelComment(t *testing.T) {
+	one := 1
+	cases := []struct {
+		name string
+		c    comment
+		want bool
+	}{
+		{"all nil", comment{Path: "f"}, true},
+		{"line set", comment{Path: "f", Line: &one}, false},
+		{"start_line set", comment{Path: "f", StartLine: &one}, false},
+		{"original_line set", comment{Path: "f", OriginalLine: &one}, false},
+		{"original_start_line set", comment{Path: "f", OriginalStartLine: &one}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFileLevelComment(tc.c); got != tc.want {
+				t.Errorf("got=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		header   string
