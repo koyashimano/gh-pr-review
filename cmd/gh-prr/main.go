@@ -1613,9 +1613,9 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 func addFileLevelThread(reviewID, path, body string) error {
 	cmd := []string{
 		"gh", "api", "graphql",
-		"-F", fmt.Sprintf("id=%s", reviewID),
-		"-F", fmt.Sprintf("path=%s", path),
-		"-F", fmt.Sprintf("body=%s", body),
+		"-f", fmt.Sprintf("id=%s", reviewID),
+		"-f", fmt.Sprintf("path=%s", path),
+		"-f", fmt.Sprintf("body=%s", body),
 		"-f", fmt.Sprintf("query=%s", addFileLevelThreadMutation),
 	}
 
