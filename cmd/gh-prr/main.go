@@ -1936,7 +1936,7 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.export.prNumber = prArg
 
@@ -1955,7 +1955,7 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.resolve.prNumber = prArg
 
@@ -1974,7 +1974,7 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.pending.prNumber = prArg
 
@@ -1998,7 +1998,7 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.wait.prNumber = prArg
 
@@ -2028,7 +2028,7 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.submit.prNumber = prArg
 
@@ -2055,14 +2055,14 @@ func parseArgs() (parsedArgs, error) {
 
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
-			return p, err
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.submitPending.prNumber = prArg
 
 		p.cmd = cmdSubmitPending
 		return p, nil
 
-	case "-h", "-help", "--h", "--help":
+	case "-h", "--help":
 		fmt.Fprintln(os.Stdout, rootHelp)
 		return p, errHelpRequested
 	default:
