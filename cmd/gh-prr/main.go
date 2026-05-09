@@ -1799,14 +1799,88 @@ If pr_number is omitted, the PR for the current branch is used.`
 const submitHelp = `Usage: gh-prr submit -f <file> [--pending] [pr_number]
 
 Submit a review from a single Markdown file. Use "-" to read from stdin.
-See docs/REVIEW_FORMAT.md for the file format.
 
 Flags:
   -f, -file string  Path to the review Markdown file (use "-" for stdin, required)
       -pending      Save the review as a pending (draft) without finalizing
   -h                Show this help
 
-If pr_number is omitted, the PR for the current branch is used.`
+If pr_number is omitted, the PR for the current branch is used.
+
+File format
+-----------
+A review file has three sections, in order:
+  1. Optional front matter block.
+  2. Optional review body (summary).
+  3. Zero or more inline comment sections.
+
+Either a body or at least one inline comment is required for COMMENT and
+REQUEST_CHANGES. APPROVE may have an empty body. --pending may be empty.
+
+Front matter
+  If the very first line is "---", lines up to the next "---" are parsed as
+  a small subset of YAML: one "key: value" per line, blanks and "#" lines
+  ignored, surrounding single/double quotes stripped. Unknown keys error.
+
+  Recognised keys:
+    event   APPROVE | REQUEST_CHANGES | COMMENT (default COMMENT).
+            Ignored when --pending is passed.
+    commit  Commit SHA the review applies to. Defaults to the PR's HEAD.
+
+Review body
+  Everything between the end of front matter (or start of file) and the
+  first inline comment header. Sent verbatim as the review summary, so
+  Markdown formatting is preserved. Leading/trailing blank lines trimmed.
+
+Inline comment headers
+  Each inline comment starts with one of these H2 lines:
+
+    ## <path>:<line>
+    ## <path>:<start_line>-<line>
+    ## <path>:<line> [side=LEFT]
+    ## <path>:<start_line>-<line> [side=LEFT, start_side=LEFT]
+    ## file: <path>
+
+  Rules:
+    - <path> must not contain ":". Forward slashes only.
+    - For a range, start_line < line.
+    - Attributes are comma-separated key=value pairs in brackets:
+        side        LEFT | RIGHT (default RIGHT). LEFT targets a deleted
+                    line on the pre-change side of the diff.
+        start_side  LEFT | RIGHT (default same as side). Range only.
+    - "## file: <path>" attaches the comment to the whole file. The
+      "file:" prefix is literal and requires whitespace after it.
+      Attribute lists and backslashes in the path are rejected.
+    - Other H2 lines (e.g. "## Notes") become part of the surrounding
+      comment body. Lines starting with "## file:" that don't match the
+      exact pattern error rather than being treated as body.
+
+Comment body
+  Everything after a header up to the next header (or EOF). Leading and
+  trailing blank lines trimmed. Empty bodies are rejected.
+
+Submission
+  GitHub allows at most one pending review per viewer per PR. submit
+  fails fast if you already have one (use "gh-prr pending" to inspect,
+  "gh-prr submit-pending" to finalize, or delete it via the GitHub UI).
+  When file-level comments are present, the review is created pending,
+  each file-level comment is attached via GraphQL, then the review is
+  finalized. If a later step fails the review stays pending.
+
+Example
+  ---
+  event: COMMENT
+  ---
+
+  Looks good overall. Two small notes below.
+
+  ## src/handler.go:42
+
+  Consider returning early here to reduce nesting.
+
+  ## README.md:10-12
+
+  This section could use a short example.`
 
 const submitPendingHelp = `Usage: gh-prr submit-pending [-e EVENT] [pr_number]
 
@@ -1988,7 +2062,7 @@ func parseArgs() (parsedArgs, error) {
 		p.cmd = cmdSubmitPending
 		return p, nil
 
-	case "-h", "--help":
+	case "-h", "-help", "--h", "--help":
 		fmt.Fprintln(os.Stdout, rootHelp)
 		return p, errHelpRequested
 	default:
