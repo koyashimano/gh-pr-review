@@ -92,11 +92,11 @@ const exportHelp = `Usage: gh-prr export [flags] [pr_number]
 Fetch all review threads on a pull request and print them as Markdown.
 
 Flags:
-  -c, -context int    Lines kept from the start and end of each diff hunk
-                      (default 3, minimum 1)
-      -unresolved-only
-                      Skip resolved threads
-  -h                  Show this help
+  -c, --context int    Lines kept from the start and end of each diff hunk
+                       (default 3, minimum 1)
+      --unresolved-only
+                       Skip resolved threads
+  -h                   Show this help
 
 If pr_number is omitted, the PR for the current branch is used.
 
@@ -119,9 +119,9 @@ const pendingHelp = `Usage: gh-prr pending [flags] [pr_number]
 Show your pending (unsubmitted) review comments as Markdown.
 
 Flags:
-  -c, -context int  Lines kept from the start and end of each diff hunk
-                    (default 3, minimum 1)
-  -h                Show this help
+  -c, --context int  Lines kept from the start and end of each diff hunk
+                     (default 3, minimum 1)
+  -h                 Show this help
 
 If pr_number is omitted, the PR for the current branch is used.`
 
@@ -130,9 +130,9 @@ const waitHelp = `Usage: gh-prr wait [flags] [pr_number]
 Poll the pull request until a new review is detected, then print its summary.
 
 Flags:
-  -i, -interval int  Polling interval in seconds (default 30, minimum 1)
-  -t, -timeout int   Timeout in seconds (default 900 = 15 minutes, minimum 1)
-  -h                 Show this help
+  -i, --interval int  Polling interval in seconds (default 30, minimum 1)
+  -t, --timeout int   Timeout in seconds (default 900 = 15 minutes, minimum 1)
+  -h                  Show this help
 
 Exits with status 1 if the timeout is reached before a new review appears.
 If pr_number is omitted, the PR for the current branch is used.`
@@ -142,9 +142,9 @@ const submitHelp = `Usage: gh-prr submit -f <file> [--pending] [pr_number]
 Submit a review from a single Markdown file. Use "-" to read from stdin.
 
 Flags:
-  -f, -file string  Path to the review Markdown file (use "-" for stdin, required)
-      -pending      Save the review as a pending (draft) without finalizing
-  -h                Show this help
+  -f, --file string  Path to the review Markdown file (use "-" for stdin, required)
+      --pending      Save the review as a pending (draft) without finalizing
+  -h                 Show this help
 
 If pr_number is omitted, the PR for the current branch is used.
 
@@ -228,8 +228,8 @@ const submitPendingHelp = `Usage: gh-prr submit-pending [-e EVENT] [pr_number]
 Submit your existing pending (draft) review.
 
 Flags:
-  -e, -event string  APPROVE, REQUEST_CHANGES, or COMMENT (default "COMMENT")
-  -h                 Show this help
+  -e, --event string  APPROVE, REQUEST_CHANGES, or COMMENT (default "COMMENT")
+  -h                  Show this help
 
 If pr_number is omitted, the PR for the current branch is used.`
 
