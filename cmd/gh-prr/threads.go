@@ -150,6 +150,11 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 							Nodes      []struct {
 								ID         string `json:"id"`
 								IsResolved bool   `json:"isResolved"`
+								Comments   struct {
+									Nodes []struct {
+										State string `json:"state"`
+									} `json:"nodes"`
+								} `json:"comments"`
 							} `json:"nodes"`
 							PageInfo pageInfo `json:"pageInfo"`
 						} `json:"reviewThreads"`
@@ -181,9 +186,13 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 		}
 
 		for _, n := range pull.ReviewThreads.Nodes {
-			if !n.IsResolved && n.ID != "" {
-				ids = append(ids, n.ID)
+			if n.IsResolved || n.ID == "" {
+				continue
 			}
+			if len(n.Comments.Nodes) > 0 && n.Comments.Nodes[0].State == "PENDING" {
+				continue
+			}
+			ids = append(ids, n.ID)
 		}
 
 		if pull.ReviewThreads.PageInfo.HasNextPage && pull.ReviewThreads.PageInfo.EndCursor != "" {
