@@ -86,6 +86,9 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
         nodes {
           id
           isResolved
+          comments(first: 1) {
+            nodes { state }
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
