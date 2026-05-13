@@ -292,7 +292,7 @@ func runExport(owner, repo string, opts exportOptions) error {
 		return err
 	}
 
-	fmt.Print(renderMarkdown(prInfo, threads, opts.ctx, opts.unresolvedOnly))
+	fmt.Print(renderMarkdown(prInfo, threads, opts.ctx, opts.includeResolved))
 	return nil
 }
 

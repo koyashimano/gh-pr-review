@@ -22,9 +22,9 @@ const (
 )
 
 type exportOptions struct {
-	ctx            int
-	unresolvedOnly bool
-	prNumber       *int
+	ctx             int
+	includeResolved bool
+	prNumber        *int
 }
 
 type resolveOptions struct {
@@ -89,13 +89,14 @@ Prerequisite: the "gh" CLI must be installed and authenticated.`
 
 const exportHelp = `Usage: gh-prr export [flags] [pr_number]
 
-Fetch all review threads on a pull request and print them as Markdown.
+Fetch unresolved review threads on a pull request and print them as Markdown.
+Resolved threads are skipped by default; pass --include-resolved to show them.
 
 Flags:
   -c, --context int    Lines kept from the start and end of each diff hunk
                        (default 3, minimum 1)
-      --unresolved-only
-                       Skip resolved threads
+      --include-resolved
+                       Also include resolved threads in the output
   -h                   Show this help
 
 If pr_number is omitted, the PR for the current branch is used.
@@ -103,7 +104,7 @@ If pr_number is omitted, the PR for the current branch is used.
 Examples:
   gh-prr export
   gh-prr export 123
-  gh-prr export -c 5 --unresolved-only 123`
+  gh-prr export -c 5 --include-resolved 123`
 
 const resolveHelp = `Usage: gh-prr resolve [pr_number]
 
@@ -283,10 +284,25 @@ func parseArgs() (parsedArgs, error) {
 
 		fs.IntVar(&p.export.ctx, "c", 3, "Number of lines to keep from the start/end of each diff hunk (alias: -context).")
 		fs.IntVar(&p.export.ctx, "context", 3, "Alias of -c for specifying diff context lines.")
-		fs.BoolVar(&p.export.unresolvedOnly, "unresolved-only", false, "Show only unresolved threads.")
+		fs.BoolVar(&p.export.includeResolved, "include-resolved", false, "Also include resolved threads (default skips them).")
+		var legacyUnresolvedOnly bool
+		fs.BoolVar(&legacyUnresolvedOnly, "unresolved-only", false, "Deprecated: now the default behavior.")
 
 		if err := parseFlagSet(fs, buf, os.Args[2:], exportHelp); err != nil {
 			return p, err
+		}
+
+		var unresolvedOnlySet bool
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "unresolved-only" {
+				unresolvedOnlySet = true
+			}
+		})
+		if unresolvedOnlySet {
+			return p, errors.New(`the --unresolved-only flag has been removed.
+gh-prr export now skips resolved threads by default, so you can simply drop this flag.
+to also include resolved threads in the output, use --include-resolved instead.
+run "gh-prr export -h" for help`)
 		}
 
 		prArg, err := parsePRArg(fs.Args())
