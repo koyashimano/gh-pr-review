@@ -11,7 +11,7 @@
 Flags must come before the optional `pr_number`. The `pr_number` defaults to the PR for the current branch.
 
 - Export review threads to Markdown:
-  - `gh-prr export [-c N] [--unresolved-only] [pr_number]`
+  - `gh-prr export [-c N] [--include-resolved] [pr_number]` (skips resolved threads by default; add `--include-resolved` to keep them)
 - Resolve all unresolved review threads:
   - `gh-prr resolve [pr_number]`
 - Show pending (unsubmitted) review comments:

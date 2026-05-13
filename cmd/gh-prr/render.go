@@ -48,7 +48,7 @@ func threadSortKey(t reviewThread) string {
 	return ""
 }
 
-func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedOnly bool) string {
+func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, includeResolved bool) string {
 	var out []string
 
 	out = append(out, "# PR Review", "")
@@ -64,7 +64,7 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, unresolvedO
 	})
 
 	for _, thread := range sorted {
-		if unresolvedOnly && thread.IsResolved {
+		if !includeResolved && thread.IsResolved {
 			continue
 		}
 
