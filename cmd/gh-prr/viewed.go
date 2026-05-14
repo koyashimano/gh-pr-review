@@ -43,12 +43,12 @@ func fetchPRFiles(owner, repo string, prNumber int) (string, []prFile, error) {
 	for {
 		cmd := []string{
 			"gh", "api", "graphql",
-			"-F", fmt.Sprintf("owner=%s", owner),
-			"-F", fmt.Sprintf("name=%s", repo),
+			"-f", fmt.Sprintf("owner=%s", owner),
+			"-f", fmt.Sprintf("name=%s", repo),
 			"-F", fmt.Sprintf("number=%d", prNumber),
 		}
 		if after != nil {
-			cmd = append(cmd, "-F", fmt.Sprintf("after=%s", *after))
+			cmd = append(cmd, "-f", fmt.Sprintf("after=%s", *after))
 		}
 		cmd = append(cmd, "-f", fmt.Sprintf("query=%s", prFilesQuery))
 
