@@ -637,6 +637,10 @@ func TestMatchPathGlob(t *testing.T) {
 		{"a/**/b", "a/x/b", true},
 		{"a/**/b", "a/x/y/b", true},
 		{"a/**/b", "a/x/c", false},
+		{"pages/[id].tsx", "pages/[id].tsx", true},
+		{"pages/[id].tsx", "pages/foo.tsx", false},
+		{"**/[id]/*.tsx", "app/[id]/page.tsx", true},
+		{"**/[id]/*.tsx", "app/users/page.tsx", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.pattern+"_"+tc.name, func(t *testing.T) {
@@ -659,6 +663,8 @@ func TestValidateGlobPattern(t *testing.T) {
 		"testdata/**",
 		"a/**/b.go",
 		"?.go",
+		"pages/[id].tsx",
+		"a/[",
 	}
 	for _, p := range good {
 		if err := validateGlobPattern(p); err != nil {
@@ -669,7 +675,6 @@ func TestValidateGlobPattern(t *testing.T) {
 	bad := []string{
 		"",
 		"foo//bar",
-		"a/[",
 	}
 	for _, p := range bad {
 		if err := validateGlobPattern(p); err == nil {
@@ -713,6 +718,8 @@ func TestParseViewedPositional(t *testing.T) {
 		{"multi patterns + pr", []string{"a/**", "b/**", "42"}, []string{"a/**", "b/**"}, intPtr(42), false},
 		{"numeric pattern alone", []string{"42"}, []string{"42"}, nil, false},
 		{"empty pattern errors", []string{"", "42"}, nil, nil, true},
+		{"flag-looking short errors", []string{"src/**", "-u"}, nil, nil, true},
+		{"flag-looking long errors", []string{"src/**", "--unmark"}, nil, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

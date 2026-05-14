@@ -521,6 +521,9 @@ func parseViewedPositional(args []string) ([]string, *int, error) {
 		}
 	}
 	for _, p := range args {
+		if strings.HasPrefix(p, "-") {
+			return nil, nil, fmt.Errorf("flag-looking positional %q: flags such as -u/--unmark and -n/--dry-run must precede patterns", p)
+		}
 		if strings.TrimSpace(p) == "" {
 			return nil, nil, fmt.Errorf("path pattern must not be empty")
 		}

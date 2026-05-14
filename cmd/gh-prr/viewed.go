@@ -92,13 +92,31 @@ func fetchPRFiles(owner, repo string, prNumber int) (string, []prFile, error) {
 // matchPathGlob reports whether name matches the glob pattern.
 //
 // Both pattern and name are split on "/" into segments. Within each segment,
-// path.Match's syntax applies (*, ?, [abc]); * does not cross segment
-// boundaries because segments are matched independently. A literal "**" as
-// a whole segment matches zero or more path segments, including "/".
+// only *, ? and \c are interpreted; [...] is treated as literal text so that
+// real-world paths such as "pages/[id].tsx" match as-is. * does not cross
+// segment boundaries because segments are matched independently. A literal
+// "**" as a whole segment matches zero or more path segments, including "/".
 func matchPathGlob(pattern, name string) (bool, error) {
 	pat := strings.Split(pattern, "/")
 	nm := strings.Split(name, "/")
 	return matchGlobSegments(pat, nm)
+}
+
+// escapeBrackets escapes "[" and "]" so path.Match treats them literally
+// rather than as a character class.
+func escapeBrackets(s string) string {
+	if !strings.ContainsAny(s, "[]") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	for _, r := range s {
+		if r == '[' || r == ']' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func matchGlobSegments(pat, name []string) (bool, error) {
@@ -121,7 +139,7 @@ func matchGlobSegments(pat, name []string) (bool, error) {
 		if len(name) == 0 {
 			return false, nil
 		}
-		ok, err := path.Match(pat[0], name[0])
+		ok, err := path.Match(escapeBrackets(pat[0]), name[0])
 		if err != nil {
 			return false, err
 		}
@@ -144,7 +162,7 @@ func validateGlobPattern(pattern string) error {
 		if seg == "**" {
 			continue
 		}
-		if _, err := path.Match(seg, ""); err != nil {
+		if _, err := path.Match(escapeBrackets(seg), ""); err != nil {
 			return fmt.Errorf("invalid pattern %q: %w", pattern, err)
 		}
 	}
@@ -158,8 +176,8 @@ func setFileViewed(prID, filePath string, unmark bool) error {
 	}
 	cmd := []string{
 		"gh", "api", "graphql",
-		"-F", fmt.Sprintf("pullRequestId=%s", prID),
-		"-F", fmt.Sprintf("path=%s", filePath),
+		"-f", fmt.Sprintf("pullRequestId=%s", prID),
+		"-f", fmt.Sprintf("path=%s", filePath),
 		"-f", fmt.Sprintf("query=%s", query),
 	}
 
@@ -263,6 +281,7 @@ func runViewed(owner, repo string, opts viewedOptions) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
+	var firstErrPath string
 	done := 0
 
 	for _, f := range matched {
@@ -275,7 +294,8 @@ func runViewed(owner, repo string, opts viewedOptions) error {
 			if err := setFileViewed(prID, fp, opts.unmark); err != nil {
 				mu.Lock()
 				if firstErr == nil {
-					firstErr = fmt.Errorf("%s %d file(s) before failure; failed on %s: %w", strings.ToLower(pastAction), done, fp, err)
+					firstErr = err
+					firstErrPath = fp
 				}
 				mu.Unlock()
 				return
@@ -289,7 +309,7 @@ func runViewed(owner, repo string, opts viewedOptions) error {
 	wg.Wait()
 
 	if firstErr != nil {
-		return firstErr
+		return fmt.Errorf("%s %d file(s); first failure on %s: %w", strings.ToLower(pastAction), done, firstErrPath, firstErr)
 	}
 
 	suffix := ""

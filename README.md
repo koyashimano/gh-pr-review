@@ -25,4 +25,4 @@ Flags must come before the optional `pr_number`. The `pr_number` defaults to the
 - Mark (or unmark) PR files as Viewed by path pattern:
   - `gh-prr viewed [-u|--unmark] [-n|--dry-run] <pattern>... [pr_number]`
   - Patterns are globs that support `*`, `?`, and `**` (matches zero or more path segments). Multiple patterns may be passed.
-  - Example: `gh-prr viewed 'testdata/**' '**/*_test.go'` marks all fixtures and test files as Viewed before review.
+  - Example: `gh-prr viewed '**/testdata/**' '**/*_test.go'` marks fixtures under any `testdata/` directory and all test files as Viewed before review. (`testdata/**` alone only matches a top-level `testdata` directory.)
