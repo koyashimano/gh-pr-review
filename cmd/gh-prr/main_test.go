@@ -602,6 +602,152 @@ func TestIsFileLevelComment(t *testing.T) {
 	}
 }
 
+func TestMatchPathGlob(t *testing.T) {
+	cases := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		{"foo.go", "foo.go", true},
+		{"foo.go", "bar.go", false},
+		{"*.go", "main.go", true},
+		{"*.go", "pkg/main.go", false},
+		{"*.go", "main.js", false},
+		{"a/b.go", "a/b.go", true},
+		{"a/b.go", "a/c.go", false},
+		{"a/*.go", "a/b.go", true},
+		{"a/*.go", "a/b/c.go", false},
+		{"**/*.go", "main.go", true},
+		{"**/*.go", "a/main.go", true},
+		{"**/*.go", "a/b/main.go", true},
+		{"**/*.go", "main.js", false},
+		{"testdata/**", "testdata", true},
+		{"testdata/**", "testdata/foo.txt", true},
+		{"testdata/**", "testdata/a/b/c.txt", true},
+		{"testdata/**", "other/foo.txt", false},
+		{"**/testdata/**", "a/testdata/b.txt", true},
+		{"**/testdata/**", "src/pkg/testdata/fixtures/x.json", true},
+		{"**/testdata/**", "src/data/foo.txt", false},
+		{"**/*_test.go", "foo_test.go", true},
+		{"**/*_test.go", "pkg/foo_test.go", true},
+		{"**/*_test.go", "pkg/foo.go", false},
+		{"?.go", "a.go", true},
+		{"?.go", "ab.go", false},
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		{"a/**/b", "a/x/c", false},
+		{"pages/[id].tsx", "pages/[id].tsx", true},
+		{"pages/[id].tsx", "pages/foo.tsx", false},
+		{"**/[id]/*.tsx", "app/[id]/page.tsx", true},
+		{"**/[id]/*.tsx", "app/users/page.tsx", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern+"_"+tc.name, func(t *testing.T) {
+			got, err := matchPathGlob(tc.pattern, tc.name)
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("matchPathGlob(%q, %q)=%v want %v", tc.pattern, tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateGlobPattern(t *testing.T) {
+	good := []string{
+		"foo.go",
+		"*.go",
+		"**/*.go",
+		"testdata/**",
+		"a/**/b.go",
+		"?.go",
+		"pages/[id].tsx",
+		"a/[",
+	}
+	for _, p := range good {
+		if err := validateGlobPattern(p); err != nil {
+			t.Errorf("validateGlobPattern(%q) returned err: %v", p, err)
+		}
+	}
+
+	bad := []string{
+		"",
+		"foo//bar",
+	}
+	for _, p := range bad {
+		if err := validateGlobPattern(p); err == nil {
+			t.Errorf("validateGlobPattern(%q) expected error, got nil", p)
+		}
+	}
+}
+
+func TestIsAlreadyTarget(t *testing.T) {
+	cases := []struct {
+		state  string
+		unmark bool
+		want   bool
+	}{
+		{"VIEWED", false, true},
+		{"UNVIEWED", false, false},
+		{"DISMISSED", false, false},
+		{"VIEWED", true, false},
+		{"UNVIEWED", true, true},
+		{"DISMISSED", true, true},
+	}
+	for _, tc := range cases {
+		if got := isAlreadyTarget(tc.state, tc.unmark); got != tc.want {
+			t.Errorf("isAlreadyTarget(%q, unmark=%v)=%v want %v", tc.state, tc.unmark, got, tc.want)
+		}
+	}
+}
+
+func TestParseViewedPositional(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantPats []string
+		wantPR   *int
+		wantErr  bool
+	}{
+		{"empty", []string{}, nil, nil, false},
+		{"single pattern", []string{"*.go"}, []string{"*.go"}, nil, false},
+		{"pattern + pr", []string{"*.go", "123"}, []string{"*.go"}, intPtr(123), false},
+		{"multi patterns", []string{"a/**", "b/**"}, []string{"a/**", "b/**"}, nil, false},
+		{"multi patterns + pr", []string{"a/**", "b/**", "42"}, []string{"a/**", "b/**"}, intPtr(42), false},
+		{"numeric pattern alone", []string{"42"}, []string{"42"}, nil, false},
+		{"empty pattern errors", []string{"", "42"}, nil, nil, true},
+		{"flag-looking short errors", []string{"src/**", "-u"}, nil, nil, true},
+		{"flag-looking long errors", []string{"src/**", "--unmark"}, nil, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPats, gotPR, err := parseViewedPositional(tc.args)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			if len(gotPats) != len(tc.wantPats) {
+				t.Fatalf("patterns=%v want %v", gotPats, tc.wantPats)
+			}
+			for i := range gotPats {
+				if gotPats[i] != tc.wantPats[i] {
+					t.Errorf("patterns[%d]=%q want %q", i, gotPats[i], tc.wantPats[i])
+				}
+			}
+			if (gotPR == nil) != (tc.wantPR == nil) {
+				t.Fatalf("prNumber=%v want %v", gotPR, tc.wantPR)
+			}
+			if gotPR != nil && *gotPR != *tc.wantPR {
+				t.Errorf("prNumber=%d want %d", *gotPR, *tc.wantPR)
+			}
+		})
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		header   string

@@ -4,12 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Four subcommands:
+`gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Subcommands:
 
 - **export**: Fetch review threads and output as Markdown (`gh-prr export [-c N] [--include-resolved] [pr_number]`). Resolved threads are skipped by default; pass `--include-resolved` to include them.
 - **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [pr_number]`)
 - **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [-c N] [pr_number]`)
 - **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [-i N] [-t N] [pr_number]`)
+- **submit**: Submit a review from a single Markdown file (`gh-prr submit -f <file> [--pending] [pr_number]`). See [docs/REVIEW_FORMAT.md](docs/REVIEW_FORMAT.md) for the file format.
+- **submit-pending**: Submit an existing pending (draft) review (`gh-prr submit-pending [-e APPROVE|REQUEST_CHANGES|COMMENT] [pr_number]`)
+- **viewed**: Mark (or with `-u`/`--unmark`, unmark) PR files as Viewed by path pattern in parallel (`gh-prr viewed [-u] [-n] <pattern>... [pr_number]`). Patterns are globs with `*`, `?`, and `**` (matches zero or more path segments).
 
 Flags must precede the optional `pr_number` (Go's `flag` package stops parsing at the first non-flag argument).
 
@@ -37,5 +40,6 @@ Key flow:
 5. For **resolve**: `fetchUnresolvedThreadIDs()` → `resolveAllThreads()` with concurrent goroutines (max 10) calling `resolveThread()` mutation
 6. For **pending**: `fetchPendingReview()` → fetch PENDING state reviews via GraphQL (+ `fetchAllPendingReviewComments()` for overflow) → `renderPendingMarkdown()`
 7. For **wait**: `fetchReviewSummary()` via GraphQL (`gh api graphql`) → poll in loop with `time.Sleep` → print latest review summary on detection
+8. For **viewed**: `fetchPRFiles()` → paginate GraphQL `pullRequest.files` (path + `viewerViewedState`) → filter by glob patterns (`matchPathGlob` supports `*`, `?`, and `**` as a whole segment) → skip files already in the target state → concurrently (max 10) call `markFileAsViewed` / `unmarkFileAsViewed` mutation via `setFileViewed()`
 
 All GitHub GraphQL API calls go through `run()` → `ghJSON()`, which shells out to `gh api graphql`. Repository and PR discovery use other `gh` subcommands such as `gh repo view` and `gh pr view`.

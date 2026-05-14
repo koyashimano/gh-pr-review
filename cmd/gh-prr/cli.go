@@ -19,6 +19,7 @@ const (
 	cmdWait          command = "wait"
 	cmdSubmit        command = "submit"
 	cmdSubmitPending command = "submit-pending"
+	cmdViewed        command = "viewed"
 )
 
 type exportOptions struct {
@@ -53,6 +54,13 @@ type submitPendingOptions struct {
 	prNumber *int
 }
 
+type viewedOptions struct {
+	patterns []string
+	unmark   bool
+	dryRun   bool
+	prNumber *int
+}
+
 type parsedArgs struct {
 	cmd           command
 	export        exportOptions
@@ -61,11 +69,12 @@ type parsedArgs struct {
 	wait          waitOptions
 	submit        submitOptions
 	submitPending submitPendingOptions
+	viewed        viewedOptions
 }
 
 var errHelpRequested = errors.New("help requested")
 
-const shortUsage = "usage: gh-prr <export|resolve|pending|wait|submit|submit-pending> [args]"
+const shortUsage = "usage: gh-prr <export|resolve|pending|wait|submit|submit-pending|viewed> [args]"
 
 const rootHelp = `gh-prr - Tools for working with GitHub pull request review threads
 
@@ -79,6 +88,7 @@ Commands:
   wait            Poll a PR for new reviews and exit when one is detected
   submit          Submit a review from a Markdown file
   submit-pending  Submit your existing pending review
+  viewed          Mark or unmark PR files as Viewed by path pattern
 
 Global:
   -h, --help  Show this help
@@ -233,6 +243,34 @@ Flags:
   -h                  Show this help
 
 If pr_number is omitted, the PR for the current branch is used.`
+
+const viewedHelp = `Usage: gh-prr viewed [flags] <pattern>... [pr_number]
+
+Mark (or unmark) PR files as Viewed by path pattern. Files that already
+have the target state are skipped.
+
+Glob patterns are matched against the PR file paths and support:
+  *   matches any sequence of characters within a single path segment
+  **  matches zero or more path segments (including slashes)
+  ?   matches any single character within a path segment
+
+Multiple patterns may be passed; a file is selected if it matches any
+of them.
+
+Flags:
+  -u, --unmark   Unmark matching files (default: mark as viewed)
+  -n, --dry-run  List matching files without changing their state
+  -h             Show this help
+
+If two or more positional arguments are given and the last one is an
+integer, it is treated as the PR number; otherwise all positional
+arguments are patterns and the PR for the current branch is used.
+
+Examples:
+  gh-prr viewed 'testdata/**'
+  gh-prr viewed '**/*_test.go' '**/fixtures/**'
+  gh-prr viewed --unmark 'src/**' 123
+  gh-prr viewed -n '**/*.snap'`
 
 func parsePRArg(args []string) (*int, error) {
 	if len(args) > 1 {
@@ -433,10 +471,62 @@ run "gh-prr export -h" for help`)
 		p.cmd = cmdSubmitPending
 		return p, nil
 
+	case string(cmdViewed):
+		fs, buf := newFlagSet("viewed")
+
+		fs.BoolVar(&p.viewed.unmark, "u", false, "Unmark matching files (default: mark as viewed). (alias: -unmark)")
+		fs.BoolVar(&p.viewed.unmark, "unmark", false, "Alias for -u.")
+		fs.BoolVar(&p.viewed.dryRun, "n", false, "List matching files without changing their state. (alias: -dry-run)")
+		fs.BoolVar(&p.viewed.dryRun, "dry-run", false, "Alias for -n.")
+
+		if err := parseFlagSet(fs, buf, os.Args[2:], viewedHelp); err != nil {
+			return p, err
+		}
+
+		patterns, prArg, err := parseViewedPositional(fs.Args())
+		if err != nil {
+			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
+		}
+		if len(patterns) == 0 {
+			return p, errors.New("viewed requires at least one path pattern\nrun \"gh-prr viewed -h\" for help")
+		}
+		p.viewed.patterns = patterns
+		p.viewed.prNumber = prArg
+
+		p.cmd = cmdViewed
+		return p, nil
+
 	case "-h", "--help":
 		fmt.Fprintln(os.Stdout, rootHelp)
 		return p, errHelpRequested
 	default:
 		return p, fmt.Errorf("unknown command %q\nrun \"gh-prr -h\" for available commands", os.Args[1])
 	}
+}
+
+func parseViewedPositional(args []string) ([]string, *int, error) {
+	if len(args) == 0 {
+		return nil, nil, nil
+	}
+	var prNumber *int
+	// Only peel off a trailing PR number when there is at least one other
+	// argument before it. With a single argument we always treat it as a
+	// pattern so that e.g. `gh-prr viewed '42'` doesn't silently drop the
+	// pattern.
+	if len(args) >= 2 {
+		last := args[len(args)-1]
+		if n, err := strconv.Atoi(last); err == nil {
+			prNumber = &n
+			args = args[:len(args)-1]
+		}
+	}
+	for _, p := range args {
+		if strings.HasPrefix(p, "-") {
+			return nil, nil, fmt.Errorf("flag-looking positional %q: flags such as -u/--unmark and -n/--dry-run must precede patterns", p)
+		}
+		if strings.TrimSpace(p) == "" {
+			return nil, nil, fmt.Errorf("path pattern must not be empty")
+		}
+	}
+	return args, prNumber, nil
 }

@@ -45,6 +45,8 @@ func dispatch(owner, repo string, args parsedArgs) error {
 		return runSubmit(owner, repo, args.submit)
 	case cmdSubmitPending:
 		return runSubmitPending(owner, repo, args.submitPending)
+	case cmdViewed:
+		return runViewed(owner, repo, args.viewed)
 	default:
 		return fmt.Errorf("unknown command %q", args.cmd)
 	}

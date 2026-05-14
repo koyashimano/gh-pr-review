@@ -196,6 +196,43 @@ query($id: ID!, $after: String) {
 }
 `
 
+const prFilesQuery = `
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      number
+      title
+      url
+      files(first: 100, after: $after) {
+        totalCount
+        nodes {
+          path
+          viewerViewedState
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+`
+
+const markFileAsViewedMutation = `
+mutation($pullRequestId: ID!, $path: String!) {
+  markFileAsViewed(input: {pullRequestId: $pullRequestId, path: $path}) {
+    clientMutationId
+  }
+}
+`
+
+const unmarkFileAsViewedMutation = `
+mutation($pullRequestId: ID!, $path: String!) {
+  unmarkFileAsViewed(input: {pullRequestId: $pullRequestId, path: $path}) {
+    clientMutationId
+  }
+}
+`
+
 const reviewSummaryQuery = `query($owner: String!, $repo: String!, $number: Int!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
