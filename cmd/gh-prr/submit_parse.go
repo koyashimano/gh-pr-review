@@ -265,8 +265,8 @@ func parseReviewMarkdown(content string) (reviewSubmission, error) {
 	return sub, nil
 }
 
-func validateReviewSubmission(sub reviewSubmission, pending bool) error {
-	if pending {
+func validateReviewSubmission(sub reviewSubmission, finalize bool) error {
+	if !finalize {
 		return nil
 	}
 	switch sub.Event {
