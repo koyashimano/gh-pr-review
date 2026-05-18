@@ -24,7 +24,7 @@ type submitReviewRequestJSON struct {
 	Comments []submitReviewCommentJSON `json:"comments,omitempty"`
 }
 
-func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pending bool) (string, string, error) {
+func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finalize bool) (string, string, error) {
 	if _, existing, err := fetchPendingReview(owner, repo, prNumber); err != nil {
 		return "", "", fmt.Errorf("failed to check for an existing pending review: %w", err)
 	} else if existing != nil {
@@ -42,9 +42,9 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 
 	hasFileComments := len(fileComments) > 0
 	// File-level comments must be added via GraphQL against a pending review.
-	// When the user wants the review submitted, we still create it as pending
+	// When the user wants the review finalized, we still create it as pending
 	// first, attach the file-level threads, then submit.
-	initialPending := pending || hasFileComments
+	initialPending := !finalize || hasFileComments
 
 	req := submitReviewRequestJSON{
 		CommitID: sub.CommitID,
@@ -104,7 +104,7 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, pendin
 		}
 	}
 
-	if hasFileComments && !pending {
+	if hasFileComments && finalize {
 		url, state, err := submitPendingReview(resp.NodeID, sub.Event)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "warning: review and all comments created, but finalize step failed; review left pending")
@@ -212,12 +212,12 @@ func runSubmit(owner, repo string, opts submitOptions) error {
 		return err
 	}
 
-	if err := validateReviewSubmission(sub, opts.pending); err != nil {
+	if err := validateReviewSubmission(sub, opts.finalize); err != nil {
 		return err
 	}
 
-	if opts.pending && (sub.Event == "APPROVE" || sub.Event == "REQUEST_CHANGES") {
-		fmt.Fprintf(os.Stderr, "warning: --pending is set; front matter event %q will be ignored (use `gh-prr submit-pending -e %s` after to finalize)\n", sub.Event, sub.Event)
+	if !opts.finalize && (sub.Event == "APPROVE" || sub.Event == "REQUEST_CHANGES") {
+		fmt.Fprintf(os.Stderr, "warning: review will be saved as pending; front matter event %q will be ignored (use `gh-prr submit-pending -e %s` after to finalize, or pass --finalize to submit immediately)\n", sub.Event, sub.Event)
 	}
 
 	prNumber, err := resolvePRNumber(opts.prNumber)
@@ -225,15 +225,15 @@ func runSubmit(owner, repo string, opts submitOptions) error {
 		return err
 	}
 
-	url, state, err := submitReview(owner, repo, prNumber, sub, opts.pending)
+	url, state, err := submitReview(owner, repo, prNumber, sub, opts.finalize)
 	if err != nil {
 		return err
 	}
 
-	if opts.pending {
-		fmt.Printf("Created pending review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
-	} else {
+	if opts.finalize {
 		fmt.Printf("Submitted review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
+	} else {
+		fmt.Printf("Created pending review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
 	}
 	if url != "" {
 		fmt.Println(url)

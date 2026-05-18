@@ -314,22 +314,22 @@ func TestParseReviewMarkdown_CRLF(t *testing.T) {
 
 func TestValidateReviewSubmission(t *testing.T) {
 	cases := []struct {
-		name    string
-		sub     reviewSubmission
-		pending bool
-		wantErr bool
+		name     string
+		sub      reviewSubmission
+		finalize bool
+		wantErr  bool
 	}{
-		{"pending allows empty", reviewSubmission{Event: "COMMENT"}, true, false},
-		{"approve allows empty", reviewSubmission{Event: "APPROVE"}, false, false},
-		{"comment empty fails", reviewSubmission{Event: "COMMENT"}, false, true},
-		{"comment with body ok", reviewSubmission{Event: "COMMENT", Body: "ok"}, false, false},
-		{"comment with comments ok", reviewSubmission{Event: "COMMENT", Comments: []reviewComment{{Path: "a", Line: 1, Body: "x"}}}, false, false},
-		{"request_changes empty fails", reviewSubmission{Event: "REQUEST_CHANGES"}, false, true},
-		{"unknown event fails", reviewSubmission{Event: "FOO"}, false, true},
+		{"pending allows empty", reviewSubmission{Event: "COMMENT"}, false, false},
+		{"approve allows empty", reviewSubmission{Event: "APPROVE"}, true, false},
+		{"comment empty fails", reviewSubmission{Event: "COMMENT"}, true, true},
+		{"comment with body ok", reviewSubmission{Event: "COMMENT", Body: "ok"}, true, false},
+		{"comment with comments ok", reviewSubmission{Event: "COMMENT", Comments: []reviewComment{{Path: "a", Line: 1, Body: "x"}}}, true, false},
+		{"request_changes empty fails", reviewSubmission{Event: "REQUEST_CHANGES"}, true, true},
+		{"unknown event fails", reviewSubmission{Event: "FOO"}, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateReviewSubmission(tc.sub, tc.pending)
+			err := validateReviewSubmission(tc.sub, tc.finalize)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err=%v wantErr=%v", err, tc.wantErr)
 			}

@@ -19,7 +19,7 @@ Flags must come before the optional `pr_number`. The `pr_number` defaults to the
 - Wait for a new review on a PR:
   - `gh-prr wait [-i N|-interval N] [-t N|-timeout N] [pr_number]` (poll every N seconds, timeout after N seconds; defaults: 30s interval, 900s timeout)
 - Submit a review from a single Markdown file:
-  - `gh-prr submit -f review.md [--pending] [pr_number]` (use `--pending` to leave the review as a draft; see [docs/REVIEW_FORMAT.md](docs/REVIEW_FORMAT.md) for the file format)
+  - `gh-prr submit -f review.md [--finalize] [pr_number]` (saves as a pending/draft review by default; pass `--finalize` to publish it immediately; see [docs/REVIEW_FORMAT.md](docs/REVIEW_FORMAT.md) for the file format)
 - Submit your existing pending review:
   - `gh-prr submit-pending [-e APPROVE|REQUEST_CHANGES|COMMENT] [pr_number]` (defaults to `COMMENT`)
 - Mark (or unmark) PR files as Viewed by path pattern:

@@ -36,7 +36,7 @@ A review file consists of three sections, in order:
 2. An optional **review body** (summary).
 3. Zero or more **inline comment** sections.
 
-Either the body or at least one inline comment is required when `event` is `COMMENT` or `REQUEST_CHANGES`. `APPROVE` may have an empty body. Pending reviews (`--pending`) may be empty.
+Either the body or at least one inline comment is required when `event` is `COMMENT` or `REQUEST_CHANGES` and the review is being finalized (`--finalize`). `APPROVE` may have an empty body. Pending reviews (the default) may be empty.
 
 ## Front matter
 
@@ -50,7 +50,7 @@ Recognised keys:
 
 | Key | Required | Description |
 | --- | --- | --- |
-| `event` | no | One of `APPROVE`, `REQUEST_CHANGES`, `COMMENT`. Defaults to `COMMENT`. Ignored when `--pending` is passed. |
+| `event` | no | One of `APPROVE`, `REQUEST_CHANGES`, `COMMENT`. Defaults to `COMMENT`. Ignored unless `--finalize` is passed (the default saves the review as pending). |
 | `commit` | no | Commit SHA the review applies to. Defaults to the PR's latest HEAD commit. |
 
 Unknown keys cause a parse error so that typos don't go unnoticed.
@@ -107,13 +107,13 @@ Everything after the header up to the next inline comment header (or end of file
 ## CLI
 
 ```
-gh-prr submit -f review.md [--pending] [pr_number]
+gh-prr submit -f review.md [--finalize] [pr_number]
 ```
 
-Flags must precede the optional `pr_number` positional argument.
+Flags must precede the optional `pr_number` positional argument. By default the review is saved as a pending (draft) review without finalizing — the `event` from front matter is then ignored, so it may be left out.
 
 - `-f, --file` — path to the Markdown file. Use `-` to read from standard input. Required.
-- `--pending` — submit as a pending (draft) review. The `event` from front matter is ignored.
+- `--finalize` — finalize the review immediately instead of leaving it pending.
 
 ### Submission flow
 
@@ -125,7 +125,7 @@ When the file also contains one or more file-level comments (`## file: <path>`),
 
 1. Create the review as **pending** with the body and any line-anchored comments.
 2. Attach each file-level comment via the GraphQL `addPullRequestReviewThread` mutation with `subjectType: FILE`.
-3. If `--pending` was not passed, finalize the review with the requested `event`.
+3. If `--finalize` was passed, finalize the review with the requested `event`.
 
 If a step after (1) fails, the partially built review is left in pending state — re-run with `gh-prr submit-pending` to finish it, or delete it via the GitHub UI.
 
@@ -177,9 +177,15 @@ No issues found. Approving.
 ### Pending review (drafted, not yet submitted)
 
 ```bash
-gh-prr submit -f review.md --pending
+gh-prr submit -f review.md
 # ...edit further or eyeball it via:
 gh-prr pending
 # then submit:
 gh-prr submit-pending -e COMMENT
+```
+
+### Finalize the review immediately
+
+```bash
+gh-prr submit -f review.md --finalize
 ```
