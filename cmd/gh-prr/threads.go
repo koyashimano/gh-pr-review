@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -123,7 +124,104 @@ func fetchAllComments(threadID string, existing commentConnection) (commentConne
 	return out, nil
 }
 
-func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error) {
+const selfReviewerToken = "@me"
+
+func isSelfReviewer(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), selfReviewerToken)
+}
+
+func containsSelfReviewer(reviewers []string) bool {
+	for _, r := range reviewers {
+		if isSelfReviewer(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func substituteSelfReviewer(reviewers []string, login string) []string {
+	out := make([]string, 0, len(reviewers))
+	for _, r := range reviewers {
+		if isSelfReviewer(r) {
+			out = append(out, login)
+		} else {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func fetchViewerLogin() (string, error) {
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", viewerLoginQuery),
+	}
+
+	var resp struct {
+		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
+	}
+
+	if err := ghJSON(cmd, &resp); err != nil {
+		return "", err
+	}
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return "", fmt.Errorf("GraphQL errors: %s", string(blob))
+	}
+	return resp.Data.Viewer.Login, nil
+}
+
+func expandSelfReviewer(reviewers []string) ([]string, error) {
+	if !containsSelfReviewer(reviewers) {
+		return reviewers, nil
+	}
+	login, err := fetchViewerLogin()
+	if err != nil {
+		return nil, fmt.Errorf("resolve @me: %w", err)
+	}
+	if login == "" {
+		return nil, errors.New("could not determine current user for @me")
+	}
+	return substituteSelfReviewer(reviewers, login), nil
+}
+
+func normalizeReviewers(reviewers []string) map[string]struct{} {
+	if len(reviewers) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(reviewers))
+	for _, r := range reviewers {
+		t := strings.ToLower(strings.TrimSpace(r))
+		if t == "" {
+			continue
+		}
+		set[t] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+func threadMatchesReviewer(authorLogin string, reviewerSet map[string]struct{}) bool {
+	if len(reviewerSet) == 0 {
+		return true
+	}
+	if authorLogin == "" {
+		return false
+	}
+	_, ok := reviewerSet[strings.ToLower(authorLogin)]
+	return ok
+}
+
+func fetchUnresolvedThreadIDs(owner, repo string, prNumber int, reviewers []string) ([]string, error) {
+	reviewerSet := normalizeReviewers(reviewers)
+
 	var ids []string
 	var after *string
 
@@ -152,7 +250,8 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 								IsResolved bool   `json:"isResolved"`
 								Comments   struct {
 									Nodes []struct {
-										State string `json:"state"`
+										State  string `json:"state"`
+										Author *user  `json:"author"`
 									} `json:"nodes"`
 								} `json:"comments"`
 							} `json:"nodes"`
@@ -189,7 +288,18 @@ func fetchUnresolvedThreadIDs(owner, repo string, prNumber int) ([]string, error
 			if n.IsResolved || n.ID == "" {
 				continue
 			}
-			if len(n.Comments.Nodes) > 0 && n.Comments.Nodes[0].State == "PENDING" {
+			if len(n.Comments.Nodes) == 0 {
+				continue
+			}
+			first := n.Comments.Nodes[0]
+			if first.State == "PENDING" {
+				continue
+			}
+			var authorLogin string
+			if first.Author != nil {
+				authorLogin = first.Author.Login
+			}
+			if !threadMatchesReviewer(authorLogin, reviewerSet) {
 				continue
 			}
 			ids = append(ids, n.ID)
@@ -241,8 +351,8 @@ func resolveThread(threadID string) error {
 	return nil
 }
 
-func resolveAllThreads(owner, repo string, prNumber int) (int, error) {
-	ids, err := fetchUnresolvedThreadIDs(owner, repo, prNumber)
+func resolveAllThreads(owner, repo string, prNumber int, reviewers []string) (int, error) {
+	ids, err := fetchUnresolvedThreadIDs(owner, repo, prNumber, reviewers)
 	if err != nil {
 		return 0, err
 	}
@@ -311,15 +421,28 @@ func runResolve(owner, repo string, opts resolveOptions) error {
 		return err
 	}
 
-	count, err := resolveAllThreads(owner, repo, prNumber)
+	reviewers, err := expandSelfReviewer(opts.reviewers)
+	if err != nil {
+		return err
+	}
+
+	count, err := resolveAllThreads(owner, repo, prNumber, reviewers)
 	if err != nil {
 		return err
 	}
 
 	if count == 0 {
-		fmt.Fprintln(os.Stdout, "No unresolved review threads.")
+		if len(reviewers) > 0 {
+			fmt.Fprintf(os.Stdout, "No unresolved review threads from %s.\n", strings.Join(reviewers, ", "))
+		} else {
+			fmt.Fprintln(os.Stdout, "No unresolved review threads.")
+		}
 	} else {
-		fmt.Fprintf(os.Stdout, "Resolved %d thread(s).\n", count)
+		if len(reviewers) > 0 {
+			fmt.Fprintf(os.Stdout, "Resolved %d thread(s) from %s.\n", count, strings.Join(reviewers, ", "))
+		} else {
+			fmt.Fprintf(os.Stdout, "Resolved %d thread(s).\n", count)
+		}
 	}
 	return nil
 }

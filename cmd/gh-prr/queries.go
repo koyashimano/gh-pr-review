@@ -87,7 +87,10 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           id
           isResolved
           comments(first: 1) {
-            nodes { state }
+            nodes {
+              state
+              author { login }
+            }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -96,6 +99,8 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 `
+
+const viewerLoginQuery = `query { viewer { login } }`
 
 const resolveThreadMutation = `
 mutation($id:ID!) {

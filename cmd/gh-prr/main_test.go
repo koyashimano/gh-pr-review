@@ -748,6 +748,163 @@ func TestParseViewedPositional(t *testing.T) {
 	}
 }
 
+func TestIsSelfReviewer(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"@me", true},
+		{"@ME", true},
+		{"@Me", true},
+		{"  @me  ", true},
+		{"@me ", true},
+		{"@mee", false},
+		{"me", false},
+		{"@", false},
+		{"", false},
+		{"alice", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := isSelfReviewer(tc.in); got != tc.want {
+				t.Errorf("isSelfReviewer(%q)=%v want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestContainsSelfReviewer(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want bool
+	}{
+		{"empty", nil, false},
+		{"none", []string{"alice", "bob"}, false},
+		{"only @me", []string{"@me"}, true},
+		{"mixed", []string{"alice", "@me", "bob"}, true},
+		{"case insensitive", []string{"alice", "@ME"}, true},
+		{"with whitespace", []string{"  @me  "}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsSelfReviewer(tc.in); got != tc.want {
+				t.Errorf("got=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSubstituteSelfReviewer(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    []string
+		login string
+		want  []string
+	}{
+		{"no @me unchanged", []string{"alice", "bob"}, "kshimano", []string{"alice", "bob"}},
+		{"single @me", []string{"@me"}, "kshimano", []string{"kshimano"}},
+		{"mixed preserves order", []string{"alice", "@me", "bob"}, "kshimano", []string{"alice", "kshimano", "bob"}},
+		{"case insensitive", []string{"@ME"}, "kshimano", []string{"kshimano"}},
+		{"empty input", nil, "kshimano", []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := substituteSelfReviewer(tc.in, tc.login)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got=%v want=%v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d] got=%q want=%q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeReviewers(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string // sorted-equivalent set check via lookup below
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, nil},
+		{"all blanks", []string{"", "  ", "\t"}, nil},
+		{"single", []string{"Alice"}, []string{"alice"}},
+		{"trim and lower", []string{"  Bob  ", "CAROL"}, []string{"bob", "carol"}},
+		{"dedupes after lower", []string{"alice", "ALICE", "Alice"}, []string{"alice"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeReviewers(tc.in)
+			if len(tc.want) == 0 {
+				if got != nil {
+					t.Errorf("got=%v want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got=%v want %v", got, tc.want)
+			}
+			for _, w := range tc.want {
+				if _, ok := got[w]; !ok {
+					t.Errorf("missing %q in %v", w, got)
+				}
+			}
+		})
+	}
+}
+
+func TestThreadMatchesReviewer(t *testing.T) {
+	cases := []struct {
+		name      string
+		login     string
+		reviewers []string
+		want      bool
+	}{
+		{"no filter accepts anyone", "alice", nil, true},
+		{"no filter accepts empty", "", nil, true},
+		{"empty login rejected when filtered", "", []string{"alice"}, false},
+		{"exact match", "alice", []string{"alice"}, true},
+		{"case insensitive match", "Alice", []string{"alice"}, true},
+		{"case insensitive match reverse", "alice", []string{"ALICE"}, true},
+		{"one of many", "bob", []string{"alice", "bob", "carol"}, true},
+		{"no match", "dave", []string{"alice", "bob"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			set := normalizeReviewers(tc.reviewers)
+			if got := threadMatchesReviewer(tc.login, set); got != tc.want {
+				t.Errorf("got=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStringSliceFlag(t *testing.T) {
+	var s stringSliceFlag
+	if err := s.Set("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("bob,carol"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(" dave , , eve "); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"alice", "bob", "carol", "dave", "eve"}
+	if len(s) != len(want) {
+		t.Fatalf("got=%v want=%v", s, want)
+	}
+	for i := range s {
+		if s[i] != want[i] {
+			t.Errorf("[%d] got=%q want=%q", i, s[i], want[i])
+		}
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		header   string
