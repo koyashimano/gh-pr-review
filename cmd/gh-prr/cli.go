@@ -407,6 +407,16 @@ run "gh-prr export -h" for help`)
 			return p, err
 		}
 
+		var reviewerFlagSet bool
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "r" || f.Name == "reviewer" {
+				reviewerFlagSet = true
+			}
+		})
+		if reviewerFlagSet && len(reviewers) == 0 {
+			return p, errors.New("-r/--reviewer was set but no reviewer login was provided\nrun \"gh-prr resolve -h\" for help")
+		}
+
 		prArg, err := parsePRArg(fs.Args())
 		if err != nil {
 			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
