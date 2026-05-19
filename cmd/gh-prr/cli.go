@@ -29,7 +29,8 @@ type exportOptions struct {
 }
 
 type resolveOptions struct {
-	prNumber *int
+	reviewers []string
+	prNumber  *int
 }
 
 type pendingOptions struct {
@@ -116,14 +117,29 @@ Examples:
   gh-prr export 123
   gh-prr export -c 5 --include-resolved 123`
 
-const resolveHelp = `Usage: gh-prr resolve [pr_number]
+const resolveHelp = `Usage: gh-prr resolve [flags] [pr_number]
 
 Resolve every unresolved review thread on the pull request.
 
-Flags:
-  -h  Show this help
+By default every unresolved thread is resolved. Pass -r/--reviewer to limit
+resolution to threads started by the given reviewer(s). The flag may be
+repeated or accept a comma-separated list, and matching is case-insensitive.
+The special value @me expands to the currently authenticated GitHub user.
 
-If pr_number is omitted, the PR for the current branch is used.`
+Flags:
+  -r, --reviewer string  Only resolve threads started by this reviewer
+                         (repeatable; comma-separated values also accepted;
+                         use @me to refer to yourself)
+  -h                     Show this help
+
+If pr_number is omitted, the PR for the current branch is used.
+
+Examples:
+  gh-prr resolve
+  gh-prr resolve -r alice
+  gh-prr resolve -r @me
+  gh-prr resolve -r alice -r bob 123
+  gh-prr resolve --reviewer @me,alice`
 
 const pendingHelp = `Usage: gh-prr pending [flags] [pr_number]
 
@@ -277,6 +293,26 @@ Examples:
   gh-prr viewed --unmark 'src/**' 123
   gh-prr viewed -n '**/*.snap'`
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	if s == nil {
+		return ""
+	}
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		t := strings.TrimSpace(part)
+		if t == "" {
+			continue
+		}
+		*s = append(*s, t)
+	}
+	return nil
+}
+
 func parsePRArg(args []string) (*int, error) {
 	if len(args) > 1 {
 		return nil, fmt.Errorf("unexpected arguments: %v", args[1:])
@@ -363,8 +399,22 @@ run "gh-prr export -h" for help`)
 	case string(cmdResolve):
 		fs, buf := newFlagSet("resolve")
 
+		var reviewers stringSliceFlag
+		fs.Var(&reviewers, "r", "Only resolve threads started by this reviewer. Repeatable; comma-separated values also accepted. (alias: -reviewer)")
+		fs.Var(&reviewers, "reviewer", "Alias for -r.")
+
 		if err := parseFlagSet(fs, buf, os.Args[2:], resolveHelp); err != nil {
 			return p, err
+		}
+
+		var reviewerFlagSet bool
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "r" || f.Name == "reviewer" {
+				reviewerFlagSet = true
+			}
+		})
+		if reviewerFlagSet && len(reviewers) == 0 {
+			return p, errors.New("-r/--reviewer was set but no reviewer login was provided\nrun \"gh-prr resolve -h\" for help")
 		}
 
 		prArg, err := parsePRArg(fs.Args())
@@ -372,6 +422,7 @@ run "gh-prr export -h" for help`)
 			return p, fmt.Errorf("%v\nrun \"gh-prr %s -h\" for help", err, fs.Name())
 		}
 		p.resolve.prNumber = prArg
+		p.resolve.reviewers = []string(reviewers)
 
 		p.cmd = cmdResolve
 		return p, nil

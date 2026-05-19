@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Subcommands:
 
 - **export**: Fetch review threads and output as Markdown (`gh-prr export [-c N] [--include-resolved] [pr_number]`). Resolved threads are skipped by default; pass `--include-resolved` to include them.
-- **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [pr_number]`)
+- **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [-r REVIEWER]... [pr_number]`). Pass `-r`/`--reviewer` (repeatable, comma-separated values also accepted, case-insensitive) to limit to threads started by the given reviewer(s). The special value `@me` expands to the authenticated user (looked up via the `viewer { login }` GraphQL query).
 - **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [-c N] [pr_number]`)
 - **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [-i N] [-t N] [pr_number]`)
 - **submit**: Submit a review from a single Markdown file (`gh-prr submit -f <file> [--finalize] [pr_number]`). Saves as a pending (draft) review by default; pass `--finalize` to publish immediately. See [docs/REVIEW_FORMAT.md](docs/REVIEW_FORMAT.md) for the file format.
