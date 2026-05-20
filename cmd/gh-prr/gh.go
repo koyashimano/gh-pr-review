@@ -11,25 +11,7 @@ import (
 )
 
 func run(cmd []string) (string, error) {
-	if len(cmd) == 0 {
-		return "", errors.New("empty command")
-	}
-
-	execCmd := exec.Command(cmd[0], cmd[1:]...)
-
-	var stdout, stderr bytes.Buffer
-	execCmd.Stdout = &stdout
-	execCmd.Stderr = &stderr
-
-	if err := execCmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = fmt.Sprintf("command failed: %s", strings.Join(cmd, " "))
-		}
-		return "", errors.New(msg)
-	}
-
-	return stdout.String(), nil
+	return runWithStdin(cmd, nil)
 }
 
 func runWithStdin(cmd []string, stdin []byte) (string, error) {
@@ -38,21 +20,39 @@ func runWithStdin(cmd []string, stdin []byte) (string, error) {
 	}
 
 	execCmd := exec.Command(cmd[0], cmd[1:]...)
-	execCmd.Stdin = bytes.NewReader(stdin)
+	if stdin != nil {
+		execCmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr
 
 	if err := execCmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = fmt.Sprintf("command failed: %s", strings.Join(cmd, " "))
-		}
-		return "", errors.New(msg)
+		return "", commandError(cmd, stdout.String(), stderr.String())
 	}
 
 	return stdout.String(), nil
+}
+
+// commandError formats a failure from exec'ing an external command.
+// `gh api` writes the HTTP error summary to stderr (e.g. "gh: Unprocessable
+// Entity (HTTP 422)") and the response body to stdout. Including both lets the
+// user see the actual GraphQL/REST validation details instead of just the
+// generic HTTP status.
+func commandError(cmd []string, stdout, stderr string) error {
+	stderrMsg := strings.TrimSpace(stderr)
+	stdoutMsg := strings.TrimSpace(stdout)
+	switch {
+	case stderrMsg != "" && stdoutMsg != "":
+		return fmt.Errorf("%s\n%s", stderrMsg, stdoutMsg)
+	case stderrMsg != "":
+		return errors.New(stderrMsg)
+	case stdoutMsg != "":
+		return errors.New(stdoutMsg)
+	default:
+		return fmt.Errorf("command failed: %s", strings.Join(cmd, " "))
+	}
 }
 
 func ghJSON(cmd []string, v any) error {
