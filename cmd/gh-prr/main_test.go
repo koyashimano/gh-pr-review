@@ -905,6 +905,52 @@ func TestStringSliceFlag(t *testing.T) {
 	}
 }
 
+func TestCommandError(t *testing.T) {
+	cmd := []string{"gh", "api", "/x"}
+	cases := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "stderr and stdout combined",
+			stdout: `{"message":"Validation Failed"}`,
+			stderr: "gh: Unprocessable Entity (HTTP 422)\n",
+			want:   "gh: Unprocessable Entity (HTTP 422)\n" + `{"message":"Validation Failed"}`,
+		},
+		{
+			name:   "stderr only",
+			stdout: "",
+			stderr: "boom\n",
+			want:   "boom",
+		},
+		{
+			name:   "stdout only",
+			stdout: "body only\n",
+			stderr: "",
+			want:   "body only",
+		},
+		{
+			name:   "both empty falls back to command",
+			stdout: "",
+			stderr: "",
+			want:   "command failed: gh api /x",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := commandError(cmd, tc.stdout, tc.stderr)
+			if err == nil {
+				t.Fatal("expected non-nil error")
+			}
+			if err.Error() != tc.want {
+				t.Errorf("got=%q\nwant=%q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func TestParseInlineHeader_Cases(t *testing.T) {
 	cases := []struct {
 		header   string
