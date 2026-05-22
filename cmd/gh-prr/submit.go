@@ -136,7 +136,7 @@ func confirmAppendToPending(existing *pendingReview, finalize bool) (bool, error
 	if finalize {
 		action = "Append the new comments and finalize the review"
 	}
-	msg := fmt.Sprintf("You already have a pending review on this PR (%d inline comment(s) so far). %s? [y/N]: ", len(existing.Comments.Nodes), action)
+	msg := fmt.Sprintf("You already have a pending review on this PR (%d comment(s) so far). %s? [y/N]: ", len(existing.Comments.Nodes), action)
 	return promptYesNo(msg)
 }
 
@@ -411,13 +411,13 @@ func runSubmit(owner, repo string, opts submitOptions) error {
 
 	switch {
 	case appended && opts.finalize:
-		fmt.Printf("Appended to pending review and finalized (%d new inline comment(s)). State: %s\n", len(sub.Comments), state)
+		fmt.Printf("Appended to pending review and finalized (%d new comment(s)). State: %s\n", len(sub.Comments), state)
 	case appended:
-		fmt.Printf("Appended to pending review (%d new inline comment(s)). State: %s\n", len(sub.Comments), state)
+		fmt.Printf("Appended to pending review (%d new comment(s)). State: %s\n", len(sub.Comments), state)
 	case opts.finalize:
-		fmt.Printf("Submitted review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
+		fmt.Printf("Submitted review (%d comment(s)). State: %s\n", len(sub.Comments), state)
 	default:
-		fmt.Printf("Created pending review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
+		fmt.Printf("Created pending review (%d comment(s)). State: %s\n", len(sub.Comments), state)
 	}
 	if url != "" {
 		fmt.Println(url)
