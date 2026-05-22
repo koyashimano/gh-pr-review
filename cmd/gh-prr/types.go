@@ -100,6 +100,7 @@ type pendingReviewResponse struct {
 
 type pendingReview struct {
 	ID       string            `json:"id"`
+	URL      string            `json:"url"`
 	Author   *user             `json:"author"`
 	Body     string            `json:"body"`
 	Comments commentConnection `json:"comments"`

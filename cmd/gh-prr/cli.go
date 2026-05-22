@@ -47,6 +47,7 @@ type waitOptions struct {
 type submitOptions struct {
 	file     string
 	finalize bool
+	yes      bool
 	prNumber *int
 }
 
@@ -164,16 +165,20 @@ Flags:
 Exits with status 1 if the timeout is reached before a new review appears.
 If pr_number is omitted, the PR for the current branch is used.`
 
-const submitHelp = `Usage: gh-prr submit -f <file> [--finalize] [pr_number]
+const submitHelp = `Usage: gh-prr submit -f <file> [--finalize] [-y] [pr_number]
 
 Submit a review from a single Markdown file. Use "-" to read from stdin.
 
 By default the review is saved as a pending (draft) review without
 finalizing. Pass --finalize to finalize it immediately.
 
+If you already have a pending review on the PR, you are prompted to
+append the new comments to it. Pass -y/--yes to skip the prompt.
+
 Flags:
   -f, --file string  Path to the review Markdown file (use "-" for stdin, required)
       --finalize     Finalize the review immediately instead of leaving it pending
+  -y, --yes          Skip the confirmation prompt when appending to an existing pending review
   -h                 Show this help
 
 If pr_number is omitted, the PR for the current branch is used.
@@ -232,9 +237,13 @@ Comment body
   trailing blank lines trimmed. Empty bodies are rejected.
 
 Submission
-  GitHub allows at most one pending review per viewer per PR. submit
-  fails fast if you already have one (use "gh-prr pending" to inspect,
-  "gh-prr submit-pending" to finalize, or delete it via the GitHub UI).
+  GitHub allows at most one pending review per viewer per PR. If you
+  already have one, submit prompts to append the new comments to it
+  (skip the prompt with -y/--yes). On append, the review body is
+  concatenated to the existing one with a blank-line separator when
+  both are non-empty; an empty body in the new file leaves the
+  existing body untouched. Use "gh-prr pending" to inspect, or delete
+  the pending review via the GitHub UI to start over.
   When --finalize is passed and file-level comments are present, the
   review is created pending, each file-level comment is attached via
   GraphQL, then the review is finalized. If a later step fails the
@@ -482,6 +491,8 @@ run "gh-prr export -h" for help`)
 		fs.StringVar(&p.submit.file, "f", "", "Path to the review Markdown file. Use - for stdin. (alias: -file)")
 		fs.StringVar(&p.submit.file, "file", "", "Alias for -f.")
 		fs.BoolVar(&p.submit.finalize, "finalize", false, "Finalize the review immediately instead of leaving it pending.")
+		fs.BoolVar(&p.submit.yes, "y", false, "Skip the confirmation prompt when appending to an existing pending review. (alias: -yes)")
+		fs.BoolVar(&p.submit.yes, "yes", false, "Alias for -y.")
 		var legacyPending bool
 		fs.BoolVar(&legacyPending, "pending", false, "Deprecated: now the default behavior.")
 
