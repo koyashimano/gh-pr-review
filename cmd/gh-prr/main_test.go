@@ -487,6 +487,29 @@ func TestParseReviewMarkdown_LineAnchoredRejectsBackslash(t *testing.T) {
 	}
 }
 
+func TestParseYesNo(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"y", true},
+		{"Y", true},
+		{"yes", true},
+		{"YES", true},
+		{" yes \n", true},
+		{"", false},
+		{"\n", false},
+		{"n", false},
+		{"no", false},
+		{"maybe", false},
+	}
+	for _, tc := range cases {
+		if got := parseYesNo(tc.in); got != tc.want {
+			t.Errorf("parseYesNo(%q)=%v want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestSubmitReviewRequestJSON_BodyAlwaysIncluded(t *testing.T) {
 	// Even when the review has only file-level comments and an empty body,
 	// the REST POST must include "body" so the request isn't an empty {}.

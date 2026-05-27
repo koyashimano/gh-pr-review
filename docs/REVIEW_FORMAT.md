@@ -107,17 +107,18 @@ Everything after the header up to the next inline comment header (or end of file
 ## CLI
 
 ```
-gh-prr submit -f review.md [--finalize] [pr_number]
+gh-prr submit -f review.md [--finalize] [-y] [pr_number]
 ```
 
 Flags must precede the optional `pr_number` positional argument. By default the review is saved as a pending (draft) review without finalizing — the `event` from front matter is then ignored, so it may be left out.
 
 - `-f, --file` — path to the Markdown file. Use `-` to read from standard input. Required.
 - `--finalize` — finalize the review immediately instead of leaving it pending.
+- `-y, --yes` — skip the confirmation prompt when appending to an existing pending review.
 
 ### Submission flow
 
-GitHub allows at most one pending review per viewer per pull request. Before posting, `gh-prr submit` checks whether the current user already has a pending review on the PR and, if so, fails fast with a hint to inspect it via `gh-prr pending`, finalize it via `gh-prr submit-pending`, or delete it via the GitHub UI.
+GitHub allows at most one pending review per viewer per pull request. Before posting, `gh-prr submit` checks whether the current user already has a pending review on the PR. If one exists, you are prompted (`[y/N]`) to append the new comments to it; pass `-y/--yes` to skip the prompt. On append, the new comments are attached one-by-one via GraphQL `addPullRequestReviewThread` (both `## path:line` and `## file: <path>` headers are supported), and the review body is concatenated onto the existing one with a blank-line separator when both are non-empty — an empty body in the new file leaves the existing body untouched. Decline the prompt to abort without touching the existing pending review (then inspect it via `gh-prr pending`, finalize it via `gh-prr submit-pending`, or delete it via the GitHub UI).
 
 When the file contains only line-anchored comments and a body, the review is created in a single REST request (`POST /repos/{owner}/{repo}/pulls/{n}/reviews`).
 

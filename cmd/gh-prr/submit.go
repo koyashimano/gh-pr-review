@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 type submitReviewCommentJSON struct {
@@ -24,11 +26,23 @@ type submitReviewRequestJSON struct {
 	Comments []submitReviewCommentJSON `json:"comments,omitempty"`
 }
 
-func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finalize bool) (string, string, error) {
-	if _, existing, err := fetchPendingReview(owner, repo, prNumber); err != nil {
-		return "", "", fmt.Errorf("failed to check for an existing pending review: %w", err)
-	} else if existing != nil {
-		return "", "", fmt.Errorf("you already have a pending review on this PR (%d inline comment(s) so far); inspect with `gh-prr pending`, finalize with `gh-prr submit-pending`, or delete it via the GitHub UI before creating a new one", len(existing.Comments.Nodes))
+func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finalize, yes bool) (string, string, bool, error) {
+	_, existing, err := fetchPendingReview(owner, repo, prNumber)
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to check for an existing pending review: %w", err)
+	}
+	if existing != nil {
+		if !yes {
+			ok, err := confirmAppendToPending(existing, finalize)
+			if err != nil {
+				return "", "", false, err
+			}
+			if !ok {
+				return "", "", false, errors.New("aborted: existing pending review left untouched (inspect with `gh-prr pending`, finalize with `gh-prr submit-pending`, or delete it via the GitHub UI)")
+			}
+		}
+		url, state, err := appendToPendingReview(existing, sub, finalize)
+		return url, state, true, err
 	}
 
 	var lineComments, fileComments []reviewComment
@@ -66,7 +80,7 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finali
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to encode review request: %w", err)
+		return "", "", false, fmt.Errorf("failed to encode review request: %w", err)
 	}
 
 	cmd := []string{
@@ -79,7 +93,7 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finali
 
 	out, err := runWithStdin(cmd, body)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 
 	var resp struct {
@@ -88,18 +102,18 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finali
 		State   string `json:"state"`
 	}
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
-		return "", "", fmt.Errorf("failed to parse review creation response: %w", err)
+		return "", "", false, fmt.Errorf("failed to parse review creation response: %w", err)
 	}
 
 	if hasFileComments {
 		if resp.NodeID == "" {
-			return resp.HTMLURL, resp.State, fmt.Errorf("review created but no node_id returned; cannot attach file-level comments")
+			return resp.HTMLURL, resp.State, false, fmt.Errorf("review created but no node_id returned; cannot attach file-level comments")
 		}
 		for i, c := range fileComments {
 			if err := addFileLevelThread(resp.NodeID, c.Path, c.Body); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: review left pending with %d/%d file-level comment(s) attached\n", i, len(fileComments))
 				fmt.Fprintf(os.Stderr, "hint: finish or delete the pending review via the GitHub UI, or finalize with `gh-prr submit-pending -e %s`\n", sub.Event)
-				return resp.HTMLURL, resp.State, fmt.Errorf("failed to attach file-level comment for %s: %w", c.Path, err)
+				return resp.HTMLURL, resp.State, false, fmt.Errorf("failed to attach file-level comment for %s: %w", c.Path, err)
 			}
 		}
 	}
@@ -109,12 +123,177 @@ func submitReview(owner, repo string, prNumber int, sub reviewSubmission, finali
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "warning: review and all comments created, but finalize step failed; review left pending")
 			fmt.Fprintf(os.Stderr, "hint: finalize with `gh-prr submit-pending -e %s`\n", sub.Event)
-			return resp.HTMLURL, resp.State, fmt.Errorf("failed to finalize review: %w", err)
+			return resp.HTMLURL, resp.State, false, fmt.Errorf("failed to finalize review: %w", err)
+		}
+		return url, state, false, nil
+	}
+
+	return resp.HTMLURL, resp.State, false, nil
+}
+
+func confirmAppendToPending(existing *pendingReview, finalize bool) (bool, error) {
+	action := "Append the new comments to it"
+	if finalize {
+		action = "Append the new comments and finalize the review"
+	}
+	msg := fmt.Sprintf("You already have a pending review on this PR (%d comment(s) so far). %s? [y/N]: ", len(existing.Comments.Nodes), action)
+	return promptYesNo(msg)
+}
+
+func promptYesNo(msg string) (bool, error) {
+	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+		defer tty.Close()
+		if _, err := fmt.Fprint(tty, msg); err != nil {
+			return false, fmt.Errorf("failed to write prompt: %w", err)
+		}
+		line, err := bufio.NewReader(tty).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("failed to read confirmation: %w", err)
+		}
+		return parseYesNo(line), nil
+	}
+
+	fi, statErr := os.Stdin.Stat()
+	if statErr != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
+		return false, errors.New("cannot prompt for confirmation: stdin is not a terminal and /dev/tty is unavailable; re-run with -y/--yes to confirm non-interactively")
+	}
+	fmt.Fprint(os.Stderr, msg)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("failed to read confirmation: %w", err)
+	}
+	return parseYesNo(line), nil
+}
+
+func parseYesNo(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "y" || s == "yes"
+}
+
+func appendToPendingReview(existing *pendingReview, sub reviewSubmission, finalize bool) (string, string, error) {
+	if strings.TrimSpace(sub.Body) != "" {
+		newBody := sub.Body
+		if strings.TrimSpace(existing.Body) != "" {
+			newBody = existing.Body + "\n\n" + sub.Body
+		}
+		if err := updatePullRequestReviewBody(existing.ID, newBody); err != nil {
+			return existing.URL, "PENDING", fmt.Errorf("failed to update pending review body: %w", err)
+		}
+	}
+
+	for i, c := range sub.Comments {
+		var err error
+		if c.SubjectFile {
+			err = addFileLevelThread(existing.ID, c.Path, c.Body)
+		} else {
+			err = addInlineThread(existing.ID, c)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %d/%d new comment(s) attached before failure\n", i, len(sub.Comments))
+			fmt.Fprintln(os.Stderr, "hint: inspect with `gh-prr pending`; the pending review has been partially updated")
+			return existing.URL, "PENDING", fmt.Errorf("failed to attach comment for %s: %w", c.Path, err)
+		}
+	}
+
+	if finalize {
+		url, state, err := submitPendingReview(existing.ID, sub.Event)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: comments appended, but finalize step failed; review left pending")
+			fmt.Fprintf(os.Stderr, "hint: finalize with `gh-prr submit-pending -e %s`\n", sub.Event)
+			return existing.URL, "PENDING", fmt.Errorf("failed to finalize review: %w", err)
 		}
 		return url, state, nil
 	}
 
-	return resp.HTMLURL, resp.State, nil
+	return existing.URL, "PENDING", nil
+}
+
+func updatePullRequestReviewBody(reviewID, body string) error {
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-f", fmt.Sprintf("id=%s", reviewID),
+		"-f", fmt.Sprintf("body=%s", body),
+		"-f", fmt.Sprintf("query=%s", updatePullRequestReviewBodyMutation),
+	}
+
+	var resp struct {
+		Data struct {
+			UpdatePullRequestReview struct {
+				PullRequestReview struct {
+					URL string `json:"url"`
+				} `json:"pullRequestReview"`
+			} `json:"updatePullRequestReview"`
+		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
+	}
+
+	if err := ghJSON(cmd, &resp); err != nil {
+		return err
+	}
+
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return fmt.Errorf("GraphQL errors: %s", string(blob))
+	}
+
+	return nil
+}
+
+func addInlineThread(reviewID string, c reviewComment) error {
+	side := c.Side
+	if side == "" {
+		side = "RIGHT"
+	}
+
+	cmd := []string{
+		"gh", "api", "graphql",
+		"-f", fmt.Sprintf("id=%s", reviewID),
+		"-f", fmt.Sprintf("path=%s", c.Path),
+		"-f", fmt.Sprintf("body=%s", c.Body),
+		"-F", fmt.Sprintf("line=%d", c.Line),
+		"-f", fmt.Sprintf("side=%s", side),
+	}
+
+	query := addInlineThreadMutation
+	if c.StartLine != nil {
+		startSide := c.StartSide
+		if startSide == "" {
+			startSide = side
+		}
+		cmd = append(cmd,
+			"-F", fmt.Sprintf("startLine=%d", *c.StartLine),
+			"-f", fmt.Sprintf("startSide=%s", startSide),
+		)
+		query = addInlineThreadRangeMutation
+	}
+
+	cmd = append(cmd, "-f", fmt.Sprintf("query=%s", query))
+
+	var resp struct {
+		Data struct {
+			AddPullRequestReviewThread struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+			} `json:"addPullRequestReviewThread"`
+		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
+	}
+
+	if err := ghJSON(cmd, &resp); err != nil {
+		return err
+	}
+
+	if len(resp.Errors) > 0 {
+		blob, _ := json.Marshal(resp.Errors)
+		return fmt.Errorf("GraphQL errors: %s", string(blob))
+	}
+
+	if resp.Data.AddPullRequestReviewThread.Thread.ID == "" {
+		return errors.New("addPullRequestReviewThread returned no thread id")
+	}
+
+	return nil
 }
 
 func addFileLevelThread(reviewID, path, body string) error {
@@ -225,15 +404,20 @@ func runSubmit(owner, repo string, opts submitOptions) error {
 		return err
 	}
 
-	url, state, err := submitReview(owner, repo, prNumber, sub, opts.finalize)
+	url, state, appended, err := submitReview(owner, repo, prNumber, sub, opts.finalize, opts.yes)
 	if err != nil {
 		return err
 	}
 
-	if opts.finalize {
-		fmt.Printf("Submitted review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
-	} else {
-		fmt.Printf("Created pending review (%d inline comment(s)). State: %s\n", len(sub.Comments), state)
+	switch {
+	case appended && opts.finalize:
+		fmt.Printf("Appended to pending review and finalized (%d new comment(s)). State: %s\n", len(sub.Comments), state)
+	case appended:
+		fmt.Printf("Appended to pending review (%d new comment(s)). State: %s\n", len(sub.Comments), state)
+	case opts.finalize:
+		fmt.Printf("Submitted review (%d comment(s)). State: %s\n", len(sub.Comments), state)
+	default:
+		fmt.Printf("Created pending review (%d comment(s)). State: %s\n", len(sub.Comments), state)
 	}
 	if url != "" {
 		fmt.Println(url)

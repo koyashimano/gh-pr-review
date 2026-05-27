@@ -136,6 +136,48 @@ mutation($id: ID!, $path: String!, $body: String!) {
 }
 `
 
+const addInlineThreadMutation = `
+mutation($id: ID!, $path: String!, $body: String!, $line: Int!, $side: DiffSide!) {
+  addPullRequestReviewThread(input: {
+    pullRequestReviewId: $id,
+    path: $path,
+    body: $body,
+    line: $line,
+    side: $side,
+    subjectType: LINE
+  }) {
+    thread { id }
+  }
+}
+`
+
+const addInlineThreadRangeMutation = `
+mutation($id: ID!, $path: String!, $body: String!, $line: Int!, $side: DiffSide!, $startLine: Int!, $startSide: DiffSide!) {
+  addPullRequestReviewThread(input: {
+    pullRequestReviewId: $id,
+    path: $path,
+    body: $body,
+    line: $line,
+    side: $side,
+    startLine: $startLine,
+    startSide: $startSide,
+    subjectType: LINE
+  }) {
+    thread { id }
+  }
+}
+`
+
+const updatePullRequestReviewBodyMutation = `
+mutation($id: ID!, $body: String!) {
+  updatePullRequestReview(input: { pullRequestReviewId: $id, body: $body }) {
+    pullRequestReview {
+      url
+    }
+  }
+}
+`
+
 const pendingReviewQuery = `
 query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
@@ -147,6 +189,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       reviews(first: 10, states: [PENDING]) {
         nodes {
           id
+          url
           author { login }
           body
           comments(first: 100) {
