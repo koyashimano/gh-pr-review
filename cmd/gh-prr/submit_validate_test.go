@@ -158,8 +158,8 @@ func TestParsePatchCommentableLines_DefaultHunkCount(t *testing.T) {
 func TestValidateCommentsAgainstDiff_OK(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"foo.go": {
-			Path:       "foo.go",
-			Patch:      "non-empty",
+			path:       "foo.go",
+			patch:      "non-empty",
 			leftLines:  map[int]bool{10: true, 11: true},
 			rightLines: map[int]bool{10: true, 11: true, 12: true},
 		},
@@ -180,7 +180,7 @@ func TestValidateCommentsAgainstDiff_OK(t *testing.T) {
 
 func TestValidateCommentsAgainstDiff_PathNotInPR(t *testing.T) {
 	diffs := map[string]*prFileDiff{
-		"foo.go": {Path: "foo.go", Patch: "x", rightLines: map[int]bool{1: true}},
+		"foo.go": {path: "foo.go", patch: "x", rightLines: map[int]bool{1: true}},
 	}
 	sub := reviewSubmission{
 		Comments: []reviewComment{{Path: "bar.go", Line: 1}},
@@ -197,9 +197,9 @@ func TestValidateCommentsAgainstDiff_PathNotInPR(t *testing.T) {
 func TestValidateCommentsAgainstDiff_RenamedHint(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"new.go": {
-			Path:             "new.go",
-			PreviousFilename: "old.go",
-			Patch:            "x",
+			path:             "new.go",
+			previousFilename: "old.go",
+			patch:            "x",
 			rightLines:       map[int]bool{1: true},
 		},
 	}
@@ -215,11 +215,32 @@ func TestValidateCommentsAgainstDiff_RenamedHint(t *testing.T) {
 	}
 }
 
+func TestValidateCommentsAgainstDiff_RenamedHintFileLevel(t *testing.T) {
+	diffs := map[string]*prFileDiff{
+		"new.go": {
+			path:             "new.go",
+			previousFilename: "old.go",
+			patch:            "x",
+			rightLines:       map[int]bool{1: true},
+		},
+	}
+	sub := reviewSubmission{
+		Comments: []reviewComment{{Path: "old.go", SubjectFile: true}},
+	}
+	err := validateCommentsAgainstDiff(sub, diffs)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "renamed to \"new.go\"") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateCommentsAgainstDiff_LineNotInDiff(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"foo.go": {
-			Path:       "foo.go",
-			Patch:      "non-empty",
+			path:       "foo.go",
+			patch:      "non-empty",
 			rightLines: map[int]bool{10: true},
 		},
 	}
@@ -241,8 +262,8 @@ func TestValidateCommentsAgainstDiff_LineNotInDiff(t *testing.T) {
 func TestValidateCommentsAgainstDiff_NoLeftSideForAddedFile(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"new.go": {
-			Path:       "new.go",
-			Patch:      "x",
+			path:       "new.go",
+			patch:      "x",
 			leftLines:  map[int]bool{},
 			rightLines: map[int]bool{1: true, 2: true},
 		},
@@ -262,8 +283,8 @@ func TestValidateCommentsAgainstDiff_NoLeftSideForAddedFile(t *testing.T) {
 func TestValidateCommentsAgainstDiff_RangeStartInvalid(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"foo.go": {
-			Path:       "foo.go",
-			Patch:      "x",
+			path:       "foo.go",
+			patch:      "x",
 			rightLines: map[int]bool{10: true, 11: true},
 		},
 	}
@@ -282,7 +303,7 @@ func TestValidateCommentsAgainstDiff_RangeStartInvalid(t *testing.T) {
 
 func TestValidateCommentsAgainstDiff_FileLevelOK(t *testing.T) {
 	diffs := map[string]*prFileDiff{
-		"foo.go": {Path: "foo.go"},
+		"foo.go": {path: "foo.go"},
 	}
 	sub := reviewSubmission{
 		Comments: []reviewComment{{Path: "foo.go", SubjectFile: true}},
@@ -305,7 +326,7 @@ func TestValidateCommentsAgainstDiff_FileLevelMissingPath(t *testing.T) {
 func TestValidateCommentsAgainstDiff_EmptyPatchSkipsLineCheck(t *testing.T) {
 	// Binary / too-large file — patch is empty. Line validation is skipped.
 	diffs := map[string]*prFileDiff{
-		"image.png": {Path: "image.png", Patch: ""},
+		"image.png": {path: "image.png", patch: ""},
 	}
 	sub := reviewSubmission{
 		Comments: []reviewComment{{Path: "image.png", Line: 999}},
@@ -318,14 +339,14 @@ func TestValidateCommentsAgainstDiff_EmptyPatchSkipsLineCheck(t *testing.T) {
 func TestValidateCommentsAgainstDiff_AggregatesMultipleErrors(t *testing.T) {
 	diffs := map[string]*prFileDiff{
 		"foo.go": {
-			Path:       "foo.go",
-			Patch:      "x",
+			path:       "foo.go",
+			patch:      "x",
 			rightLines: map[int]bool{10: true},
 		},
 		"renamed_new.go": {
-			Path:             "renamed_new.go",
-			PreviousFilename: "renamed_old.go",
-			Patch:            "x",
+			path:             "renamed_new.go",
+			previousFilename: "renamed_old.go",
+			patch:            "x",
 			rightLines:       map[int]bool{1: true},
 		},
 	}
@@ -361,7 +382,7 @@ func TestValidateCommentsAgainstDiff_AggregatesMultipleErrors(t *testing.T) {
 
 func TestValidateCommentsAgainstDiff_SingleErrorNoAggregateHeader(t *testing.T) {
 	diffs := map[string]*prFileDiff{
-		"foo.go": {Path: "foo.go", Patch: "x", rightLines: map[int]bool{10: true}},
+		"foo.go": {path: "foo.go", patch: "x", rightLines: map[int]bool{10: true}},
 	}
 	sub := reviewSubmission{
 		Comments: []reviewComment{{Path: "foo.go", Line: 42}},

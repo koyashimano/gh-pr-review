@@ -12,10 +12,9 @@ import (
 // prFileDiff describes a single file in the PR's diff for the purpose of
 // validating inline comment locations before they are sent to GitHub.
 type prFileDiff struct {
-	Path             string
-	Status           string
-	PreviousFilename string
-	Patch            string
+	path             string
+	previousFilename string
+	patch            string
 	// leftLines is the set of line numbers on the pre-change ("LEFT") side
 	// where a review comment can be anchored (context + deleted lines).
 	leftLines map[int]bool
@@ -26,7 +25,6 @@ type prFileDiff struct {
 
 type restPRFile struct {
 	Filename         string `json:"filename"`
-	Status           string `json:"status"`
 	PreviousFilename string `json:"previous_filename"`
 	Patch            string `json:"patch"`
 }
@@ -50,10 +48,9 @@ func fetchPRDiffs(owner, repo string, prNumber int) (map[string]*prFileDiff, err
 	diffs := make(map[string]*prFileDiff, len(files))
 	for _, f := range files {
 		d := &prFileDiff{
-			Path:             f.Filename,
-			Status:           f.Status,
-			PreviousFilename: f.PreviousFilename,
-			Patch:            f.Patch,
+			path:             f.Filename,
+			previousFilename: f.PreviousFilename,
+			patch:            f.Patch,
 		}
 		if f.Patch != "" {
 			left, right, err := parsePatchCommentableLines(f.Patch)
@@ -159,8 +156,8 @@ func validateOneComment(c reviewComment, diffs map[string]*prFileDiff) error {
 	d, ok := diffs[c.Path]
 	if !ok {
 		for _, dd := range diffs {
-			if dd.PreviousFilename != "" && dd.PreviousFilename == c.Path {
-				return fmt.Errorf("file %q is not in the PR's changed files; it appears to have been renamed to %q — use the new path for review comments", c.Path, dd.Path)
+			if dd.previousFilename != "" && dd.previousFilename == c.Path {
+				return fmt.Errorf("file %q is not in the PR's changed files; it appears to have been renamed to %q — use the new path", c.Path, dd.path)
 			}
 		}
 		return fmt.Errorf("file %q is not in the PR's changed files", c.Path)
@@ -168,7 +165,7 @@ func validateOneComment(c reviewComment, diffs map[string]*prFileDiff) error {
 	if c.SubjectFile {
 		return nil
 	}
-	if d.Patch == "" {
+	if d.patch == "" {
 		// Binary file or a patch that GitHub omitted (e.g. too large).
 		// We cannot tell which line numbers are valid, so leave it to
 		// the server.
@@ -208,7 +205,7 @@ func checkCommentableLine(d *prFileDiff, line int, side string) error {
 		return nil
 	}
 	if len(lines) == 0 {
-		return fmt.Errorf("line %d (side=%s) is not in the diff (no %s-side lines exist for this file — try the other side)", line, side, side)
+		return fmt.Errorf("side=%s is not in the diff (no %s-side lines exist for this file — try the other side)", side, side)
 	}
-	return fmt.Errorf("line %d (side=%s) is not in the diff (only lines shown in the hunks of this PR can be commented on)", line, side)
+	return fmt.Errorf("side=%s is not in the diff (only lines shown in the hunks of this PR can be commented on)", side)
 }
