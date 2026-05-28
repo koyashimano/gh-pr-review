@@ -404,6 +404,16 @@ func runSubmit(owner, repo string, opts submitOptions) error {
 		return err
 	}
 
+	if len(sub.Comments) > 0 {
+		diffs, err := fetchPRDiffs(owner, repo, prNumber)
+		if err != nil {
+			return err
+		}
+		if err := validateCommentsAgainstDiff(sub, diffs); err != nil {
+			return err
+		}
+	}
+
 	url, state, appended, err := submitReview(owner, repo, prNumber, sub, opts.finalize, opts.yes)
 	if err != nil {
 		return err
