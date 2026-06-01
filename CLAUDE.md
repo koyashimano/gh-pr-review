@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `gh-prr` is a Go CLI tool for working with GitHub PR review threads. It uses the `gh` CLI under the hood to call the GitHub GraphQL API. Subcommands:
 
-- **export**: Fetch review threads and output as Markdown (`gh-prr export [-c N] [--include-resolved] [pr_number]`). Resolved threads are skipped by default; pass `--include-resolved` to include them.
+- **export**: Fetch review threads and output as Markdown (`gh-prr export [-c N] [--include-resolved] [pr_number]`). Resolved threads are skipped by default; pass `--include-resolved` to include them. Submitted reviews' overall summaries (the review body, plus APPROVED/CHANGES_REQUESTED verdicts with empty bodies) are rendered first as `## Review by <login> — <STATE>` sections; PENDING reviews and empty-bodied COMMENTED reviews are skipped.
 - **resolve**: Resolve all unresolved review threads in parallel (`gh-prr resolve [-r REVIEWER]... [pr_number]`). Pass `-r`/`--reviewer` (repeatable, comma-separated values also accepted, case-insensitive) to limit to threads started by the given reviewer(s). The special value `@me` expands to the authenticated user (looked up via the `viewer { login }` GraphQL query).
 - **pending**: Show the current user's pending (unsubmitted) review comments (`gh-prr pending [-c N] [pr_number]`)
 - **wait**: Poll a PR for new reviews and exit when one is detected (`gh-prr wait [-i N] [-t N] [pr_number]`)
@@ -36,7 +36,7 @@ Key flow:
 1. `parseArgs()` → parse subcommand and flags
 2. `getOwnerRepo()` → detect repo via `gh repo view`
 3. `resolvePRNumber()` → resolve PR number from arg or current branch via `gh pr view`
-4. For **export**: `fetchThreads()` → paginate GraphQL reviewThreads (+ `fetchAllComments()` for overflow) → `renderMarkdown()`
+4. For **export**: `fetchThreads()` → paginate GraphQL reviewThreads (+ `fetchAllComments()` for overflow) and collect submitted reviews once from the first page (+ `fetchAllReviews()` for overflow, since `reviews` is not paginated by the shared `reviewThreads` cursor) → `renderMarkdown()` (review summaries via `renderReviewSummaries()`)
 5. For **resolve**: `fetchUnresolvedThreadIDs()` → `resolveAllThreads()` with concurrent goroutines (max 10) calling `resolveThread()` mutation
 6. For **submit**: `submitReview()` → check existing pending via `fetchPendingReview()`; if found prompt via `confirmAppendToPending()` (uses `/dev/tty`, falls back to TTY stdin; `-y/--yes` skips it) → `appendToPendingReview()` (optionally `updatePullRequestReviewBody()` then per-comment `addInlineThread()` / `addFileLevelThread()`, optionally `submitPendingReview()`). If no pending exists, the original REST `POST /repos/{owner}/{repo}/pulls/{n}/reviews` path runs.
 7. For **pending**: `fetchPendingReview()` → fetch PENDING state reviews via GraphQL (+ `fetchAllPendingReviewComments()` for overflow) → `renderPendingMarkdown()`

@@ -12,6 +12,7 @@ Flags must come before the optional `pr_number`. The `pr_number` defaults to the
 
 - Export review threads to Markdown:
   - `gh-prr export [-c N] [--include-resolved] [pr_number]` (skips resolved threads by default; add `--include-resolved` to keep them)
+  - Submitted reviews' overall summaries are included at the top as `## Review by <login> — <STATE>` sections (the review body, plus APPROVED/CHANGES_REQUESTED verdicts even without body text). PENDING drafts and empty-bodied COMMENTED reviews are omitted.
 - Resolve all unresolved review threads:
   - `gh-prr resolve [-r|--reviewer REVIEWER]... [pr_number]`
   - Pass `-r`/`--reviewer` to limit resolution to threads started by the given reviewer(s). The flag may be repeated or accept a comma-separated list (`-r alice,bob`); matching is case-insensitive. The special value `@me` expands to the currently authenticated user.

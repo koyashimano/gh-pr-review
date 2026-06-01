@@ -48,7 +48,64 @@ func threadSortKey(t reviewThread) string {
 	return ""
 }
 
-func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, includeResolved bool) string {
+// reviewHasSummary reports whether a review is worth showing in the summary
+// section: it carries an overall comment, or records a verdict (approval /
+// change request) even without body text. Empty-bodied COMMENTED reviews — the
+// containers GitHub creates for single inline comments — are filtered out as
+// noise, since their content already appears in the thread list.
+func reviewHasSummary(r prReviewNode) bool {
+	if strings.TrimSpace(r.Body) != "" {
+		return true
+	}
+	return r.State == "APPROVED" || r.State == "CHANGES_REQUESTED"
+}
+
+func renderReviewSummaries(out []string, reviews []prReviewNode) []string {
+	summarized := make([]prReviewNode, 0, len(reviews))
+	for _, r := range reviews {
+		if r.State == "PENDING" {
+			continue
+		}
+		if reviewHasSummary(r) {
+			summarized = append(summarized, r)
+		}
+	}
+	if len(summarized) == 0 {
+		return out
+	}
+
+	sort.SliceStable(summarized, func(i, j int) bool {
+		return summarized[i].SubmittedAt < summarized[j].SubmittedAt
+	})
+
+	for _, r := range summarized {
+		author := "?"
+		if r.Author != nil && r.Author.Login != "" {
+			author = r.Author.Login
+		}
+		state := r.State
+		if state == "" {
+			state = "COMMENTED"
+		}
+		out = append(out, fmt.Sprintf("## Review by %s — %s", author, state))
+		if r.SubmittedAt != "" {
+			out = append(out, fmt.Sprintf("- Submitted: %s", r.SubmittedAt))
+		}
+		if r.URL != "" {
+			out = append(out, fmt.Sprintf("- URL: %s", r.URL))
+		}
+		out = append(out, "")
+		body := strings.TrimRight(r.Body, "\n\r")
+		if body == "" {
+			body = "_(no summary)_"
+		}
+		out = append(out, body, "")
+	}
+
+	return out
+}
+
+func renderMarkdown(pr pullRequest, threads []reviewThread, reviews []prReviewNode, ctx int, includeResolved bool) string {
 	var out []string
 
 	out = append(out, "# PR Review", "")
@@ -56,6 +113,8 @@ func renderMarkdown(pr pullRequest, threads []reviewThread, ctx int, includeReso
 	out = append(out, fmt.Sprintf("- Title: %s", pr.Title))
 	out = append(out, fmt.Sprintf("- Number: %d", pr.Number))
 	out = append(out, "")
+
+	out = renderReviewSummaries(out, reviews)
 
 	sorted := make([]reviewThread, len(threads))
 	copy(sorted, threads)

@@ -4,9 +4,22 @@ const gqlQuery = `
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      id
       number
       title
       url
+      reviews(first: 100) {
+        totalCount
+        nodes {
+          id
+          url
+          state
+          body
+          submittedAt
+          author { login }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
       reviewThreads(first: 100, after: $after) {
         totalCount
         nodes {
@@ -41,6 +54,27 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
             }
             pageInfo { hasNextPage endCursor }
           }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+`
+
+const reviewPageQuery = `
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      reviews(first: 100, after: $after) {
+        totalCount
+        nodes {
+          id
+          url
+          state
+          body
+          submittedAt
+          author { login }
         }
         pageInfo { hasNextPage endCursor }
       }
