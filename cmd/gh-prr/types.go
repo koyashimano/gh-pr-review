@@ -14,10 +14,27 @@ type graphQLError struct {
 }
 
 type pullRequest struct {
+	ID            string                 `json:"id"`
 	Number        int                    `json:"number"`
 	Title         string                 `json:"title"`
 	URL           string                 `json:"url"`
+	Reviews       reviewConnection       `json:"reviews"`
 	ReviewThreads reviewThreadConnection `json:"reviewThreads"`
+}
+
+type reviewConnection struct {
+	TotalCount int            `json:"totalCount"`
+	Nodes      []prReviewNode `json:"nodes"`
+	PageInfo   pageInfo       `json:"pageInfo"`
+}
+
+type prReviewNode struct {
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	Author      *user  `json:"author"`
+	Body        string `json:"body"`
+	State       string `json:"state"`
+	SubmittedAt string `json:"submittedAt"`
 }
 
 type reviewThreadConnection struct {

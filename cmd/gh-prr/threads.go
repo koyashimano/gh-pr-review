@@ -9,10 +9,12 @@ import (
 	"sync"
 )
 
-func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread, error) {
+func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread, []prReviewNode, error) {
 	var prInfo pullRequest
 	var threads []reviewThread
+	var reviews []prReviewNode
 	var after *string
+	reviewsCollected := false
 
 	for {
 		cmd := []string{
@@ -26,29 +28,49 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			cmd = append(cmd, "-F", fmt.Sprintf("after=%s", *after))
 		}
 
+		// reviews are collected once from the first page only, so skip fetching
+		// them on subsequent reviewThreads pages to avoid redundant GraphQL cost.
+		cmd = append(cmd, "-F", fmt.Sprintf("withReviews=%t", after == nil))
+
 		cmd = append(cmd, "-f", fmt.Sprintf("query=%s", gqlQuery))
 
 		var resp graphQLResponse
 		if err := ghJSON(cmd, &resp); err != nil {
-			return prInfo, nil, err
+			return prInfo, nil, nil, err
 		}
 
 		if len(resp.Errors) > 0 {
 			blob, _ := json.Marshal(resp.Errors)
-			return prInfo, nil, fmt.Errorf("GraphQL errors: %s", string(blob))
+			return prInfo, nil, nil, fmt.Errorf("GraphQL errors: %s", string(blob))
 		}
 
 		pr := resp.Data.Repository.PullRequest
 		if pr.Number == 0 && pr.Title == "" && pr.URL == "" {
-			return prInfo, nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
+			return prInfo, nil, nil, fmt.Errorf("pull request #%d in %s/%s not found or GraphQL query returned no data; verify the PR number and that you have access to the repository", prNumber, owner, repo)
 		}
 
 		if prInfo.Number == 0 {
 			prInfo = pullRequest{
+				ID:     pr.ID,
 				Number: pr.Number,
 				Title:  pr.Title,
 				URL:    pr.URL,
 			}
+		}
+
+		// reviews are not paginated by the shared $after cursor, so collect them
+		// once from the first page and follow their own pageInfo if needed.
+		if !reviewsCollected {
+			reviewsCollected = true
+			full := pr.Reviews
+			if pr.Reviews.PageInfo.HasNextPage && pr.ID != "" {
+				expanded, err := fetchAllReviews(pr.ID, pr.Reviews)
+				if err != nil {
+					return prInfo, nil, nil, err
+				}
+				full = expanded
+			}
+			reviews = full.Nodes
 		}
 
 		if threads == nil {
@@ -65,7 +87,7 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			if thread.Comments.PageInfo.HasNextPage {
 				fullComments, err := fetchAllComments(thread.ID, thread.Comments)
 				if err != nil {
-					return prInfo, nil, err
+					return prInfo, nil, nil, err
 				}
 				thread.Comments = fullComments
 			}
@@ -81,7 +103,47 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 		break
 	}
 
-	return prInfo, threads, nil
+	return prInfo, threads, reviews, nil
+}
+
+func fetchAllReviews(prID string, existing reviewConnection) (reviewConnection, error) {
+	out := existing
+	after := existing.PageInfo.EndCursor
+
+	for existing.PageInfo.HasNextPage && after != "" {
+		cmd := []string{
+			"gh", "api", "graphql",
+			"-F", fmt.Sprintf("id=%s", prID),
+			"-F", fmt.Sprintf("after=%s", after),
+			"-f", fmt.Sprintf("query=%s", reviewPageQuery),
+		}
+
+		var resp struct {
+			Data struct {
+				Node struct {
+					Reviews reviewConnection `json:"reviews"`
+				} `json:"node"`
+			} `json:"data"`
+			Errors []graphQLError `json:"errors"`
+		}
+
+		if err := ghJSON(cmd, &resp); err != nil {
+			return out, err
+		}
+
+		if len(resp.Errors) > 0 {
+			blob, _ := json.Marshal(resp.Errors)
+			return out, fmt.Errorf("GraphQL errors: %s", string(blob))
+		}
+
+		out.Nodes = append(out.Nodes, resp.Data.Node.Reviews.Nodes...)
+		out.TotalCount = resp.Data.Node.Reviews.TotalCount
+		out.PageInfo = resp.Data.Node.Reviews.PageInfo
+		after = out.PageInfo.EndCursor
+		existing.PageInfo = out.PageInfo
+	}
+
+	return out, nil
 }
 
 func fetchAllComments(threadID string, existing commentConnection) (commentConnection, error) {
@@ -406,12 +468,12 @@ func runExport(owner, repo string, opts exportOptions) error {
 		return err
 	}
 
-	prInfo, threads, err := fetchThreads(owner, repo, prNumber)
+	prInfo, threads, reviews, err := fetchThreads(owner, repo, prNumber)
 	if err != nil {
 		return err
 	}
 
-	fmt.Print(renderMarkdown(prInfo, threads, opts.ctx, opts.includeResolved))
+	fmt.Print(renderMarkdown(prInfo, threads, reviews, opts.ctx, opts.includeResolved))
 	return nil
 }
 
