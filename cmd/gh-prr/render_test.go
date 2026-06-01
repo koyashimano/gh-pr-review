@@ -60,6 +60,21 @@ func TestRenderMarkdown_SkipsPendingAndEmptyCommented(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdown_WhitespaceOnlyBodyRendersPlaceholder(t *testing.T) {
+	pr := pullRequest{Number: 1, Title: "T", URL: "u"}
+	reviews := []prReviewNode{
+		{Author: &user{Login: "alice"}, State: "APPROVED", Body: "   \n  \t "},
+	}
+	out := renderMarkdown(pr, nil, reviews, 3, false)
+
+	if !strings.Contains(out, "## Review by alice — APPROVED") {
+		t.Errorf("approval with whitespace-only body should still appear:\n%s", out)
+	}
+	if !strings.Contains(out, "_(no summary)_") {
+		t.Errorf("whitespace-only body should render placeholder, not a blank line:\n%s", out)
+	}
+}
+
 func TestRenderMarkdown_NoReviews(t *testing.T) {
 	pr := pullRequest{Number: 1, Title: "T", URL: "u"}
 	out := renderMarkdown(pr, nil, nil, 3, false)

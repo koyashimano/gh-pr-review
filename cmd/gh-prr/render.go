@@ -96,7 +96,7 @@ func renderReviewSummaries(out []string, reviews []prReviewNode) []string {
 		}
 		out = append(out, "")
 		body := strings.TrimRight(r.Body, "\n\r")
-		if body == "" {
+		if strings.TrimSpace(body) == "" {
 			body = "_(no summary)_"
 		}
 		out = append(out, body, "")

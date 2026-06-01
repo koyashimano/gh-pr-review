@@ -28,6 +28,10 @@ func fetchThreads(owner, repo string, prNumber int) (pullRequest, []reviewThread
 			cmd = append(cmd, "-F", fmt.Sprintf("after=%s", *after))
 		}
 
+		// reviews are collected once from the first page only, so skip fetching
+		// them on subsequent reviewThreads pages to avoid redundant GraphQL cost.
+		cmd = append(cmd, "-F", fmt.Sprintf("withReviews=%t", after == nil))
+
 		cmd = append(cmd, "-f", fmt.Sprintf("query=%s", gqlQuery))
 
 		var resp graphQLResponse

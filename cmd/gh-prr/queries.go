@@ -1,14 +1,14 @@
 package main
 
 const gqlQuery = `
-query($owner: String!, $name: String!, $number: Int!, $after: String) {
+query($owner: String!, $name: String!, $number: Int!, $after: String, $withReviews: Boolean!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       id
       number
       title
       url
-      reviews(first: 100) {
+      reviews(first: 100) @include(if: $withReviews) {
         totalCount
         nodes {
           id
